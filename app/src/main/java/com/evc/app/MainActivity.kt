@@ -92,6 +92,8 @@ class MainActivity : Activity() {
     // Keep timeline sampling independent so 120 storyboard frames cannot block the timeline strip.
     private val timelineThumbnailWorker = Executors.newSingleThreadExecutor()
     private val selectedFrames = linkedSetOf<Int>()
+    // Anchor used for tap-then-long-press range toggling in the storyboard.
+    private var storyboardRangeAnchorIndex: Int? = null
     private val frameViews = mutableMapOf<Int, FrameLayout>()
     private val frameBitmaps = mutableMapOf<Int, Bitmap>()
     private val deletedStoryboardFrames = linkedSetOf<Int>()
@@ -1489,15 +1491,43 @@ class MainActivity : Activity() {
                 return@setOnClickListener
             }
             if (!selectedFrames.add(index)) selectedFrames.remove(index)
+            storyboardRangeAnchorIndex = index
             refreshCellStyle(index)
             updateSelectionText()
-            val rangeStart = storyboardStartMs.coerceIn(0L, videoDurationMs)
-            val rangeEnd = (if (storyboardEndMs > rangeStart) storyboardEndMs else videoDurationMs).coerceIn(rangeStart, videoDurationMs)
-            val timeMs = storyboardTimestampForIndex(index, ROWS * FRAMES_PER_ROW, rangeStart, rangeEnd)
-            timelineView.setPlayhead(timeMs)
-            try { videoView.seekTo(timeMs.toInt()) } catch (_: Exception) { }
+            seekToStoryboardFrame(index)
+        }
+        cell.setOnLongClickListener {
+            if (selectedUri == null || videoDurationMs <= 0L) {
+                Toast.makeText(this, "ابتدا یک ویدیو انتخاب کنید", Toast.LENGTH_SHORT).show()
+                return@setOnLongClickListener true
+            }
+            val anchor = storyboardRangeAnchorIndex
+            if (anchor == null) {
+                storyboardRangeAnchorIndex = index
+                Toast.makeText(this, "ابتدا یک اسلاید را لمس کنید، سپس اسلاید مقصد را نگه دارید", Toast.LENGTH_SHORT).show()
+            } else {
+                val first = minOf(anchor, index)
+                val last = maxOf(anchor, index)
+                for (frameIndex in first..last) {
+                    if (frameIndex in deletedStoryboardFrames || frameIndex !in frameViews) continue
+                    if (!selectedFrames.add(frameIndex)) selectedFrames.remove(frameIndex)
+                }
+                // The long-pressed cell becomes the next range anchor.
+                storyboardRangeAnchorIndex = index
+                updateSelectionText()
+                seekToStoryboardFrame(index)
+            }
+            true
         }
         return cell
+    }
+
+    private fun seekToStoryboardFrame(index: Int) {
+        val rangeStart = storyboardStartMs.coerceIn(0L, videoDurationMs)
+        val rangeEnd = (if (storyboardEndMs > rangeStart) storyboardEndMs else videoDurationMs).coerceIn(rangeStart, videoDurationMs)
+        val timeMs = storyboardTimestampForIndex(index, ROWS * FRAMES_PER_ROW, rangeStart, rangeEnd)
+        timelineView.setPlayhead(timeMs)
+        try { videoView.seekTo(timeMs.toInt()) } catch (_: Exception) { }
     }
 
     private fun makeBorder(selected: Boolean): GradientDrawable = GradientDrawable().apply {
@@ -2250,16 +2280,39 @@ class MainActivity : Activity() {
             return
         }
 
-        // One exact interval per selected storyboard cell; never calculate the inverse
-        // (unselected/remaining intervals) and never fall back to full-video export.
-        val selectedRanges = chosen.mapNotNull { index ->
-            val a = storyboardTimestampForIndex(index, total, rangeStart, rangeEnd)
-            val b = if (storyboardIntervalMs != null && storyboardIntervalMs!! > 0L) {
-                minOf(rangeEnd, a + storyboardIntervalMs!!)
-            } else rangeStart + (rangeEnd - rangeStart) * (index + 1) / total
-            if (a >= rangeEnd || b <= a) return@mapNotNull null
-            if (b > a) a to b else null
+        // Build output intervals ONLY from selected storyboard indices. Consecutive
+        // selected cells are joined into one range; any unselected cell closes the range.
+        // Do not compute the complement (all unselected/remaining intervals).
+        val selectedRanges = mutableListOf<Pair<Long, Long>>()
+        var runStartIndex: Int? = null
+        var previousIndex: Int? = null
+        fun appendSelectedRun(firstIndex: Int, lastIndex: Int) {
+            val a = storyboardTimestampForIndex(firstIndex, total, rangeStart, rangeEnd)
+                .coerceIn(rangeStart, rangeEnd)
+            // Use the next cell boundary as the end, even when a custom interval is set.
+            // This keeps the selected run from spilling into the next unselected cell.
+            val b = storyboardTimestampForIndex(lastIndex + 1, total, rangeStart, rangeEnd)
+                .coerceIn(rangeStart, rangeEnd)
+            if (b > a) selectedRanges.add(a to b)
         }
+        for (index in chosen) {
+            if (runStartIndex == null) {
+                runStartIndex = index
+                previousIndex = index
+            } else if (previousIndex != null && index == previousIndex!! + 1) {
+                previousIndex = index
+            } else {
+                appendSelectedRun(runStartIndex!!, previousIndex!!)
+                runStartIndex = index
+                previousIndex = index
+            }
+        }
+        if (runStartIndex != null && previousIndex != null) {
+            appendSelectedRun(runStartIndex!!, previousIndex!!)
+        }
+        // Keep the ranges as constructed from selected runs. Do not merge across gaps:
+        // a gap represents at least one unselected storyboard cell and must stay excluded.
+        val normalizedSelectedRanges = selectedRanges.toList()
         if (selectedRanges.isEmpty()) {
             Toast.makeText(this, "بازهٔ زمانی معتبری در اسلایدهای انتخاب‌شده وجود ندارد", Toast.LENGTH_LONG).show()
             return
@@ -2267,13 +2320,13 @@ class MainActivity : Activity() {
 
         val button = findViewById<Button>(R.id.exportButton)
         button.isEnabled = false
-        statusText.text = "در حال ساخت یک فایل فقط از ${selectedRanges.size} بازهٔ انتخاب‌شده؛ بازه‌های انتخاب‌نشده اضافه نمی‌شوند…"
+        statusText.text = "در حال ساخت خروجی فقط از ${normalizedSelectedRanges.size} بازهٔ پیوستهٔ انتخاب‌شده؛ اسلایدهای انتخاب‌نشده وارد خروجی نمی‌شوند…"
         worker.execute {
             var temp: File? = null
             var outUri: Uri? = null
             var error: String? = null
             try {
-                temp = muxRemainingRanges(source, selectedRanges)
+                temp = muxRemainingRanges(source, normalizedSelectedRanges)
                 val values = ContentValues().apply {
                     put(MediaStore.Video.Media.DISPLAY_NAME, "EVC_selected_storyboard_${System.currentTimeMillis()}.${outputExtension()}")
                     put(MediaStore.Video.Media.MIME_TYPE, outputMimeType())
@@ -2302,7 +2355,7 @@ class MainActivity : Activity() {
             mainHandler.post {
                 button.isEnabled = true
                 if (error == null && outUri != null) {
-                    statusText.text = "فقط ${selectedRanges.size} بازهٔ انتخاب‌شده در یک فایل ذخیره شد؛ بازه‌های انتخاب‌نشده وارد خروجی نشدند"
+                    statusText.text = "فقط ${normalizedSelectedRanges.size} بازهٔ پیوستهٔ انتخاب‌شده در یک فایل ذخیره شد؛ بازه‌های انتخاب‌نشده وارد خروجی نشدند"
                 } else {
                     statusText.text = "خروجی اسلایدهای انتخاب‌شده ناموفق بود: ${error ?: "خطای ناشناخته"}"
                 }

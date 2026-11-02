@@ -61,8 +61,12 @@
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="۱) متن را وارد کنید و دکمهٔ فعال‌کردن متن را بزنید تا کادر بنفش روی پلیر ظاهر شود. ۲) برای فیلم رویی، فایل را انتخاب کنید و با دکمهٔ «جای ویدیوی رویی» محل آن را تعیین کنید. ۳) برای صدا، «افزودن صدا» را بزنید. ۴) در پایان «ساخت خروجی متن / فیلم / صدا» را بزنید. صدای انتخابی جای صدای اصلی را می‌گیرد؛ خروجی تصویری دوباره رمزگذاری می‌شود." android:textColor="#B9D7FF" android:textSize="9sp" />
     </LinearLayout>
 
-    <Button android:id="@+id/joinAfterButton" android:layout_width="match_parent" android:layout_height="44dp" android:layout_marginTop="3dp" android:text="Join • افزودن ویدیو به انتهای ویدیوی اصلی" android:textSize="11sp" android:textColor="#07142F" android:textStyle="bold" android:backgroundTint="#FFD21F" android:minHeight="0dp" />
 
+
+    <LinearLayout android:id="@+id/joinAndExportSegmentsRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="1dp" android:paddingBottom="1dp">
+        <Button android:id="@+id/joinAfterButton" android:layout_width="0dp" android:layout_height="34dp" android:layout_weight="1" android:layout_marginEnd="3dp" android:text="Join • افزودن به انتها" android:textSize="8sp" android:textColor="#07142F" android:textStyle="bold" android:backgroundTint="#FFD21F" android:minHeight="0dp" android:minWidth="0dp" android:paddingLeft="2dp" android:paddingRight="2dp" />
+        <Button android:id="@+id/exportSegmentsSeparatelyButton" android:layout_width="0dp" android:layout_height="34dp" android:layout_weight="1" android:text="ذخیرهٔ قطعه‌ها جداگانه" android:textSize="8sp" android:textColor="#07142F" android:backgroundTint="#43D9A3" android:minHeight="0dp" android:minWidth="0dp" android:paddingLeft="2dp" android:paddingRight="2dp" />
+    </LinearLayout>
     <HorizontalScrollView android:layout_width="match_parent" android:layout_height="32dp" android:fillViewport="false" android:scrollbars="none" android:overScrollMode="never">
         <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent" android:orientation="horizontal" android:gravity="center_vertical">
             <Button android:id="@+id/outputFormatButton" android:layout_width="92dp" android:layout_height="30dp" android:text="فرمت: MP4" android:textSize="9sp" android:textColor="#07142F" android:backgroundTint="#FFD21F" android:minHeight="0dp" android:minWidth="0dp" android:paddingLeft="2dp" android:paddingRight="2dp" />
@@ -77,7 +81,7 @@
             <Button android:id="@+id/selectForExportModeButton" android:layout_width="94dp" android:layout_height="60dp" android:text="انتخاب برای خروجی" android:textSize="8sp" android:textColor="#FFFFFF" android:backgroundTint="#25456F" android:minHeight="0dp" android:minWidth="0dp" android:paddingLeft="1dp" android:paddingRight="1dp" />
         </LinearLayout>
     </HorizontalScrollView>
-    <Button android:id="@+id/exportSegmentsSeparatelyButton" android:layout_width="match_parent" android:layout_height="60dp" android:layout_marginTop="1dp" android:text="ذخیرهٔ قطعه‌ها جداگانه (بدون تغییر کدک)" android:textSize="9sp" android:textColor="#07142F" android:backgroundTint="#43D9A3" android:minHeight="0dp" android:paddingLeft="1dp" android:paddingRight="1dp" />
+
 
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="1dp" android:paddingBottom="1dp">
         <Button android:id="@+id/pickStoryboardStartButton" android:layout_width="0dp" android:layout_height="60dp" android:layout_weight="1" android:minHeight="0dp" android:minWidth="0dp" android:paddingLeft="3dp" android:paddingRight="3dp" android:text="ثبت شروع از پخش" android:textSize="9sp" android:textColor="#07142F" android:backgroundTint="#43D9A3" />
