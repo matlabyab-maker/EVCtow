@@ -15,19 +15,16 @@ android {
         ndk {
             abiFilters += listOf("armeabi-v7a")
         }
-        versionCode = 293
-        versionName = "0.2.93"
+        versionCode = 295
+        versionName = "0.2.95"
     }
 
     buildTypes {
         getByName("debug") {
-            // Keep the CI-produced debug APK installable while shrinking unused code/resources.
-            isMinifyEnabled = true
-            isShrinkResources = true
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            // Stability hotfix: keep FFmpegKit JNI/native bindings and Media3 classes intact.
+            // Disable shrinking until the reported button-triggered app exits are diagnosed.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 

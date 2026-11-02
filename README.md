@@ -1,6 +1,6 @@
 # EVCtow — Android video editor
 
-**Project version:** 0.2.93  
+**Project version:** 0.2.94  
 **Android minimum SDK:** 24 (Android 7.0)  
 **Build:** GitHub Actions / Gradle 8.9 / JDK 17
 
@@ -21,7 +21,7 @@ It is configured to run on:
 - pull requests targeting any branch;
 - manual launch through **Actions → EVCtow Android Build → Run workflow**.
 
-On success, the workflow uploads an artifact named `EVCtow-0.2.93-ARM32-TextVideoAudio-Activation-debug-apk` containing the debug APK.
+On success, the workflow uploads an artifact named `EVCtow-0.2.94-ARM32-TextVideoAudio-Controls-debug-apk` containing the debug APK.
 
 ## Uploading to a new repository
 
@@ -95,10 +95,23 @@ The workflow and project configuration have been prepared, but an Android build 
 - Preserves the existing ARM32 target and other editing features.
 
 
-## Version 0.2.93 — Text / overlay video / audio activation
+## Version 0.2.94 — Text / overlay video / audio activation
 
 - Added an explicit **Apply text / video / selected audio and create output** button, wired to the same export path as the final output button.
 - The combined output action now accepts text only, overlay video only, selected external audio only, or combinations of these.
 - Selected external audio is encoded as the output soundtrack and replaces the source soundtrack in this combined-export path. Use **Build track output** if the intention is to add the external audio as a separate audio track instead.
 - Clarified the UI labels so track muxing is not confused with the combined text/video/audio export.
 - Build still needs verification in GitHub Actions on a real Android toolchain; this source package has not been installed and tested on a device here.
+
+
+## Version 0.2.94 — Separate activation and export actions
+- The text button now activates text placement instead of starting export immediately. It checks that a source video and text are selected, shows a clear message, and enables dragging the purple placement box over the player.
+- Overlay-video selection, external-audio selection, and output creation remain separate actions.
+- The output button is explicitly labeled as step 3; the instructions list the exact sequence.
+- Build/runtime testing on a physical Android device is still required.
+
+## Version 0.2.95 — runtime-stability hotfix
+- Bumped versionCode/versionName to 295 / 0.2.95.
+- Disabled R8 minification and resource shrinking in the debug APK build. This avoids stripping or rewriting FFmpegKit JNI/native integration and Media3-related code while investigating reports that editing buttons close the app.
+- No new editing features were added; existing project functionality and controls are otherwise retained.
+- This is a targeted mitigation, not a verified device-level fix: the app has not been run on the user's device in this environment. If the crash persists, Android runtime Logcat is still needed to identify the exact exception.

@@ -236,10 +236,28 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.exportSegmentsSeparatelyButton).setOnClickListener { exportTimelineSegmentsSeparately() }
 
         findViewById<Button>(R.id.openButton).setOnClickListener { chooseVideo() }
-        findViewById<Button>(R.id.addAudioButton).setOnClickListener { chooseExternalAudio() }
+        findViewById<Button>(R.id.addAudioButton).setOnClickListener {
+            statusText.text = "در حال باز کردن انتخاب‌گر فایل صوتی…"
+            chooseExternalAudio()
+        }
         findViewById<Button>(R.id.addSubtitleButton).setOnClickListener { chooseExternalSubtitle() }
         findViewById<Button>(R.id.muxTracksButton).setOnClickListener { exportWithExternalTracks() }
-        findViewById<Button>(R.id.addTextButton).setOnClickListener { exportTextAndVideoOverlay() }
+        findViewById<Button>(R.id.addTextButton).setOnClickListener {
+            val enteredText = findViewById<EditText>(R.id.overlayTextInput).text.toString().trim()
+            if (selectedUri == null) {
+                Toast.makeText(this, "ابتدا با «انتخاب ویدیو» ویدیوی اصلی را انتخاب کنید", Toast.LENGTH_LONG).show()
+                statusText.text = "متن هنوز فعال نشده: ابتدا ویدیوی اصلی را انتخاب کنید"
+            } else if (enteredText.isEmpty()) {
+                findViewById<EditText>(R.id.overlayTextInput).requestFocus()
+                Toast.makeText(this, "ابتدا متن دلخواه را در کادر وارد کنید", Toast.LENGTH_LONG).show()
+                statusText.text = "متن هنوز فعال نشده: متن دلخواه را وارد کنید"
+            } else {
+                activatePlacementMode(PlacementOverlayView.Mode.TEXT)
+                findViewById<Button>(R.id.addTextButton).text = "متن فعال شد ✓ • جایگاه را روی پلیر بکشید"
+                statusText.text = "متن فعال شد؛ کادر بنفش را روی پلیر بکشید تا محل متن ثبت شود. برای تولید فایل، دکمهٔ «ساخت خروجی متن/فیلم/صدا» را بزنید."
+                Toast.makeText(this, "متن فعال شد؛ محل آن را روی پلیر تعیین کنید", Toast.LENGTH_LONG).show()
+            }
+        }
         findViewById<Button>(R.id.exportVideoEffectsButton).setOnClickListener { exportVideoEffects() }
         val effectChecks = listOf(
             findViewById<CheckBox>(R.id.blurRegionCheck),
@@ -248,7 +266,10 @@ class MainActivity : Activity() {
         )
         effectChecks.forEach { check -> check.setOnCheckedChangeListener { _, _ -> updateVideoEffectsUi() } }
         updateVideoEffectsUi()
-        findViewById<Button>(R.id.pickOverlayVideoButton).setOnClickListener { chooseOverlayVideo() }
+        findViewById<Button>(R.id.pickOverlayVideoButton).setOnClickListener {
+            statusText.text = "در حال باز کردن انتخاب‌گر ویدیوی رویی…"
+            chooseOverlayVideo()
+        }
         findViewById<Button>(R.id.exportOverlayButton).setOnClickListener { exportTextAndVideoOverlay() }
         findViewById<Button>(R.id.joinAfterButton).setOnClickListener { chooseVideosToAppend() }
         findViewById<Button>(R.id.mergeButton).setOnClickListener { if (mergeUris.isEmpty()) chooseVideosForMerge() else mergeSelectedVideos() }
