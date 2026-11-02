@@ -1,3 +1,11 @@
+## Version 0.2.100 — Text-only export routed through Media3
+
+- Text-only MP4 export now uses Media3 Transformer with a text overlay instead of invoking FFmpegKit.
+- The export button is disabled during processing and re-enabled on success or failure.
+- Output is saved to `Movies/EVC` as `EVC_Text_*.mp4`.
+- Text + overlay-video or external-audio combinations still use the existing FFmpeg path.
+- Build/device testing has not been performed in this environment.
+
 # EVCtow — Android video editor
 
 **Project version:** 0.2.94  

@@ -27,6 +27,7 @@ import android.view.ViewGroup
 import android.view.MotionEvent
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Typeface
 import android.graphics.RectF
 import android.widget.Button
 import android.widget.EditText
@@ -38,6 +39,10 @@ import android.widget.MediaController
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
 import android.widget.Toast
 import android.widget.VideoView
 import androidx.media3.common.MediaItem
@@ -53,6 +58,9 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.effect.RgbAdjustment
 import androidx.media3.effect.HslAdjustment
 import androidx.media3.effect.Crop
+import androidx.media3.effect.OverlayEffect
+import androidx.media3.effect.StaticOverlaySettings
+import androidx.media3.effect.TextOverlay
 import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.ReturnCode
 import java.util.concurrent.Executors
@@ -1135,6 +1143,82 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Text-only export through Media3 Transformer, avoiding FFmpegKit native execution. */
+    @androidx.media3.common.util.UnstableApi
+    private fun exportTextOnlyWithTransformer(sourceUri: Uri, text: String, textSize: Int, textX: Int, textY: Int) {
+        val button = findViewById<Button>(R.id.exportOverlayButton)
+        button.isEnabled = false
+        statusText.text = "در حال ساخت خروجی متن با موتور داخلی اندروید…"
+        val output = File(cacheDir, "evc_text_${System.currentTimeMillis()}.mp4")
+        try {
+            val styledText = SpannableString(text).apply {
+                if (isNotEmpty()) {
+                    setSpan(ForegroundColorSpan(Color.WHITE), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(StyleSpan(Typeface.BOLD), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            }
+            val anchorX = (-1f + 2f * textX.coerceIn(0, 100) / 100f).coerceIn(-1f, 1f)
+            val anchorY = (1f - 2f * textY.coerceIn(0, 100) / 100f).coerceIn(-1f, 1f)
+            val scale = (textSize / 100f).coerceIn(0.08f, 1.6f)
+            val overlaySettings = StaticOverlaySettings.Builder()
+                .setOverlayFrameAnchor(-1f, 1f)
+                .setBackgroundFrameAnchor(anchorX, anchorY)
+                .setScale(scale, scale)
+                .build()
+            val textOverlay = TextOverlay.createStaticTextOverlay(styledText, overlaySettings)
+            val overlayEffect = OverlayEffect(listOf(textOverlay))
+            val item = EditedMediaItem.Builder(MediaItem.fromUri(sourceUri))
+                .setEffects(Effects(emptyList(), listOf(overlayEffect)))
+                .build()
+            val composition = Composition.Builder(EditedMediaItemSequence.Builder(item).build()).build()
+            val transformer = Transformer.Builder(this).addListener(object : Transformer.Listener {
+                override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                    activeTransformer = null
+                    try {
+                        val values = ContentValues().apply {
+                            put(MediaStore.Video.Media.DISPLAY_NAME, "EVC_Text_${System.currentTimeMillis()}.mp4")
+                            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                                put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EVC")
+                                put(MediaStore.Video.Media.IS_PENDING, 1)
+                            }
+                        }
+                        val outUri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                            ?: throw IllegalStateException("ساخت فایل در Movies/EVC ممکن نشد")
+                        contentResolver.openOutputStream(outUri)?.use { stream -> FileInputStream(output).use { it.copyTo(stream) } }
+                            ?: throw IllegalStateException("نوشتن فایل خروجی ناموفق بود")
+                        if (android.os.Build.VERSION.SDK_INT >= 29) {
+                            contentResolver.update(outUri, ContentValues().apply {
+                                put(MediaStore.Video.Media.IS_PENDING, 0)
+                            }, null, null)
+                        }
+                        output.delete()
+                        button.isEnabled = true
+                        statusText.text = "متن روی ویدیو در Movies/EVC ذخیره شد."
+                        Toast.makeText(this@MainActivity, statusText.text, Toast.LENGTH_LONG).show()
+                    } catch (e: Exception) {
+                        output.delete(); button.isEnabled = true
+                        statusText.text = "ذخیرهٔ خروجی متن ناموفق بود: ${e.message ?: "خطا"}"
+                        Toast.makeText(this@MainActivity, statusText.text, Toast.LENGTH_LONG).show()
+                    }
+                }
+                override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
+                    activeTransformer = null
+                    output.delete(); button.isEnabled = true
+                    statusText.text = "ساخت خروجی متن ناموفق بود: ${exportException.message ?: "خطای رمزگذاری"}"
+                    Toast.makeText(this@MainActivity, statusText.text, Toast.LENGTH_LONG).show()
+                }
+            }).build()
+            activeTransformer = transformer
+            transformer.start(composition, output.absolutePath)
+        } catch (e: Exception) {
+            activeTransformer = null
+            output.delete(); button.isEnabled = true
+            statusText.text = "شروع خروجی متن ناموفق بود: ${e.message ?: e.javaClass.simpleName}"
+            Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+        }
+    }
+
     private fun chooseOverlayVideo() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -1169,6 +1253,12 @@ class MainActivity : Activity() {
         val videoWidth = number(R.id.overlayVideoWidthInput, 25, 5, 90)
         if (videoX + videoWidth > 100 || videoY >= 100) {
             Toast.makeText(this, "جایگاه یا عرض ویدیوی رویی نامعتبر است", Toast.LENGTH_LONG).show()
+            return
+        }
+        // For text-only MP4 exports use Media3's native Transformer overlay path.
+        // This avoids entering the FFmpegKit JNI path that was closing the app on some ARM32 phones.
+        if (text.isNotEmpty() && secondUri == null && audioUri == null && !outputContainerMatroska) {
+            exportTextOnlyWithTransformer(sourceUri, text, textSize, textX, textY)
             return
         }
         val button = findViewById<Button>(R.id.exportOverlayButton)
