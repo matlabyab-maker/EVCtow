@@ -77,3 +77,11 @@ The workflow and project configuration have been prepared, but an Android build 
 - Added a dedicated Join button to append one or more selected videos to the end of the currently opened main video, in the order returned by the Android picker. The main video remains first; duplicate URIs are removed.
 - The existing multi-video Merge workflow remains available.
 - Join exports a newly encoded MP4 using the existing Media3 Transformer sequence workflow and saves it under Movies/EVC.
+
+
+## Version 0.2.91 — Effect stability and drag placement
+
+- Hardens the video-effects FFmpeg path with even crop dimensions, reduced filter/encoder threading, and a lighter encoding preset.
+- Adds draggable placement selection directly on the player for blur region, text, and picture-in-picture video; dragging updates the corresponding X/Y fields automatically.
+- Retains existing project features and ARM32 (`armeabi-v7a`) target.
+- Android compilation must be confirmed by GitHub Actions.

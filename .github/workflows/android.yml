@@ -50,6 +50,6 @@ jobs:
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: EVCtow-0.2.90-ARM32-Join-debug-apk
+          name: EVCtow-0.2.91-ARM32-EffectCrash-DragPlacement-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

@@ -63,6 +63,8 @@ import kotlin.math.max
 
 class MainActivity : Activity() {
     private lateinit var videoView: VideoView
+    private lateinit var placementOverlay: PlacementOverlayView
+    private var placementMode: PlacementOverlayView.Mode = PlacementOverlayView.Mode.NONE
     private lateinit var playerColorPreview: ImageView
     private val previewBitmaps = mutableMapOf<Int, Bitmap>()
     private var playerPreviewRequest = 0
@@ -127,6 +129,29 @@ class MainActivity : Activity() {
         val playerContainer = findViewById<FrameLayout>(R.id.playerContainer)
         cropOverlay = FreeCropOverlayView()
         playerContainer.addView(cropOverlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        placementOverlay = PlacementOverlayView(this) { xPct, yPct ->
+            when (placementMode) {
+                PlacementOverlayView.Mode.BLUR -> {
+                    findViewById<EditText>(R.id.blurXInput).setText(xPct.toString())
+                    findViewById<EditText>(R.id.blurYInput).setText(yPct.toString())
+                }
+                PlacementOverlayView.Mode.TEXT -> {
+                    findViewById<EditText>(R.id.overlayTextXInput).setText(xPct.toString())
+                    findViewById<EditText>(R.id.overlayTextYInput).setText(yPct.toString())
+                }
+                PlacementOverlayView.Mode.VIDEO -> {
+                    findViewById<EditText>(R.id.overlayVideoXInput).setText(xPct.toString())
+                    findViewById<EditText>(R.id.overlayVideoYInput).setText(yPct.toString())
+                }
+                else -> Unit
+            }
+        }
+        placementOverlay.visibility = View.GONE
+        playerContainer.addView(placementOverlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        findViewById<Button>(R.id.placeBlurOnPlayerButton).setOnClickListener { activatePlacementMode(PlacementOverlayView.Mode.BLUR) }
+        findViewById<Button>(R.id.placeTextOnPlayerButton).setOnClickListener { activatePlacementMode(PlacementOverlayView.Mode.TEXT) }
+        findViewById<Button>(R.id.placeVideoOnPlayerButton).setOnClickListener { activatePlacementMode(PlacementOverlayView.Mode.VIDEO) }
+        findViewById<Button>(R.id.hidePlacementOverlayButton).setOnClickListener { placementMode = PlacementOverlayView.Mode.NONE; placementOverlay.visibility = View.GONE }
         freeCropControls = findViewById(R.id.freeCropControls)
         findViewById<Button>(R.id.cropButton).setOnClickListener { toggleFreeCropMode() }
         findViewById<Button>(R.id.applyFreeCropButton).setOnClickListener {
@@ -1252,29 +1277,32 @@ class MainActivity : Activity() {
                 val ext = outputExtension()
                 output = File(cacheDir, "evc_effects_${System.currentTimeMillis()}.$ext")
                 val graph = mutableListOf<String>()
-                var currentLabel = "0:v"
+                val filters = mutableListOf<String>()
+                if (noise) filters.add("noise=alls=12:allf=t+u")
+                if (sharpen) filters.add("unsharp=5:5:0.55:5:5:0.0")
+                val args = mutableListOf("-y", "-hide_banner", "-threads", "1", "-filter_threads", "1", "-filter_complex_threads", "1", "-i", sourceFile.absolutePath)
                 if (blur) {
                     graph.add("[0:v]split=2[evc_base][evc_blur_src]")
-                    graph.add("[evc_blur_src]crop=w='iw*$w/100':h='ih*$h/100':x='iw*$x/100':y='ih*$y/100',boxblur=10:2[evc_blurred]")
-                    graph.add("[evc_base][evc_blurred]overlay=x='main_w*$x/100':y='main_h*$y/100'[evc_fx0]")
-                    currentLabel = "evc_fx0"
+                    graph.add("[evc_blur_src]crop=w='max(2,2*floor(iw*$w/200))':h='max(2,2*floor(ih*$h/200))':x='2*floor(iw*$x/200)':y='2*floor(ih*$y/200)',boxblur=8:1[evc_blurred]")
+                    graph.add("[evc_base][evc_blurred]overlay=x='2*floor(main_w*$x/200)':y='2*floor(main_h*$y/200)'[evc_fx0]")
+                    if (filters.isNotEmpty()) graph.add("[evc_fx0]${filters.joinToString(",")}[evc_vout]")
+                    val finalLabel = if (filters.isNotEmpty()) "evc_vout" else "evc_fx0"
+                    args.addAll(listOf("-filter_complex", graph.joinToString(";"), "-map", "[$finalLabel]"))
+                } else {
+                    args.addAll(listOf("-vf", filters.joinToString(","), "-map", "0:v:0"))
                 }
-                val filters = mutableListOf<String>()
-                if (noise) filters.add("noise=alls=18:allf=t+u")
-                if (sharpen) filters.add("unsharp=5:5:0.8:5:5:0.0")
-                if (filters.isNotEmpty()) {
-                    val finalLabel = "evc_vout"
-                    graph.add("[$currentLabel]${filters.joinToString(",")}[$finalLabel]")
-                    currentLabel = finalLabel
-                }
-                val args = mutableListOf("-y", "-i", sourceFile.absolutePath)
-                args.addAll(listOf("-filter_complex", graph.joinToString(";"), "-map", "[$currentLabel]", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "copy"))
+                args.addAll(listOf("-map", "0:a?", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p", "-threads", "1", "-c:a", "copy"))
                 if (!outputContainerMatroska) args.addAll(listOf("-movflags", "+faststart"))
                 args.addAll(listOf("-max_muxing_queue_size", "2048", "-f", if (outputContainerMatroska) "matroska" else "mp4", output.absolutePath))
                 val session = FFmpegKit.executeWithArguments(args.toTypedArray())
                 if (!ReturnCode.isSuccess(session.returnCode) || !output.exists() || output.length() == 0L) {
                     throw IllegalStateException("ساخت خروجی افکت ناموفق بود: ${session.allLogsAsString.takeLast(1400)}")
                 }
+            } catch (e: OutOfMemoryError) {
+                error = "حافظهٔ دستگاه برای این افکت کافی نبود؛ برنامه را ببندید و دوباره با یک افکت در هر بار امتحان کنید"
+                output?.delete()
+                output = null
+                System.gc()
             } catch (e: Exception) {
                 error = e.message ?: e.javaClass.simpleName
                 output?.delete()
@@ -1317,6 +1345,31 @@ class MainActivity : Activity() {
                     Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
                 }
             }
+        }
+    }
+
+    private fun activatePlacementMode(mode: PlacementOverlayView.Mode) {
+        placementMode = mode
+        val readPercent: (Int, Int) -> Int = { id, fallback -> findViewById<EditText>(id).text.toString().toIntOrNull()?.coerceIn(0, 100) ?: fallback }
+        val x: Int
+        val y: Int
+        val w: Int
+        val h: Int
+        when (mode) {
+            PlacementOverlayView.Mode.BLUR -> { x = readPercent(R.id.blurXInput, 10); y = readPercent(R.id.blurYInput, 10); w = readPercent(R.id.blurWInput, 25).coerceAtLeast(5); h = readPercent(R.id.blurHInput, 25).coerceAtLeast(5) }
+            PlacementOverlayView.Mode.TEXT -> { x = readPercent(R.id.overlayTextXInput, 5); y = readPercent(R.id.overlayTextYInput, 5); w = 40; h = 20 }
+            PlacementOverlayView.Mode.VIDEO -> { x = readPercent(R.id.overlayVideoXInput, 70); y = readPercent(R.id.overlayVideoYInput, 5); w = readPercent(R.id.overlayVideoWidthInput, 25).coerceIn(5, 90); h = (w * 9 / 16).coerceAtLeast(8) }
+            else -> { placementOverlay.visibility = View.GONE; return }
+        }
+        placementOverlay.setMode(mode)
+        placementOverlay.setSelection(x, y, w, h)
+        placementOverlay.visibility = View.VISIBLE
+        placementOverlay.bringToFront()
+        statusText.text = when (mode) {
+            PlacementOverlayView.Mode.BLUR -> "کادر بلوری را روی پلیر بکش؛ اندازه از W و H گرفته می‌شود"
+            PlacementOverlayView.Mode.TEXT -> "جای متن را روی پلیر لمس کن و بکش؛ محل متن خودکار ثبت می‌شود"
+            PlacementOverlayView.Mode.VIDEO -> "ویدیوی رویی را روی پلیر بکش؛ مختصات خودکار ثبت می‌شوند"
+            else -> ""
         }
     }
 
