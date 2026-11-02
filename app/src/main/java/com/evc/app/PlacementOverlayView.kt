@@ -34,6 +34,20 @@ class PlacementOverlayView(
     private var startXPercent = 0
     private var startYPercent = 0
     private var dragging = false
+    private var previewText: String = ""
+    private var previewTextSizePx: Float = 24f
+    private val previewTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        textSize = 24f
+        style = Paint.Style.FILL
+        setShadowLayer(2f, 1f, 1f, android.graphics.Color.BLACK)
+    }
+    private val previewOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.BLACK
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        strokeJoin = Paint.Join.ROUND
+    }
 
     fun setSelection(x: Int, y: Int, width: Int, height: Int) {
         widthPercent = width.coerceIn(5, 95)
@@ -59,16 +73,53 @@ class PlacementOverlayView(
         fillPaint.color = (color and 0x00FFFFFF) or 0x26000000
         labelPaint.color = color
         canvas.drawRoundRect(RectF(left, top, right, bottom), 7f, 7f, fillPaint)
-        canvas.drawRoundRect(RectF(left, top, right, bottom), 7f, 7f, borderPaint)
-        val label = when (tag as? Mode ?: Mode.NONE) {
-            Mode.TEXT -> "متن • بکش"
-            Mode.VIDEO -> "ویدیوی رویی • بکش"
-            Mode.NONE -> ""
+        val mode = tag as? Mode ?: Mode.NONE
+        if (mode == Mode.TEXT && previewText.isNotBlank()) {
+            // Render the real user text, not just a placeholder label, in the player preview.
+            val availableWidth = (right - left - 12f).coerceAtLeast(20f)
+            val words = previewText.split(Regex("\\s+"))
+            val lines = mutableListOf<String>()
+            var line = ""
+            for (word in words) {
+                val candidate = if (line.isEmpty()) word else "$line $word"
+                if (previewTextPaint.measureText(candidate) <= availableWidth || line.isEmpty()) {
+                    line = candidate
+                } else {
+                    lines.add(line)
+                    line = word
+                }
+            }
+            if (line.isNotEmpty()) lines.add(line)
+            val lineHeight = previewTextPaint.textSize * 1.2f
+            var baseline = top + previewTextPaint.textSize + 5f
+            for (textLine in lines) {
+                if (baseline > bottom - 3f) break
+                canvas.drawText(textLine, left + 6f, baseline, previewOutlinePaint)
+                canvas.drawText(textLine, left + 6f, baseline, previewTextPaint)
+                baseline += lineHeight
+            }
+        } else {
+            val label = when (mode) {
+                Mode.TEXT -> "متن • بکش"
+                Mode.VIDEO -> "ویدیوی رویی • بکش"
+                Mode.NONE -> ""
+            }
+            canvas.drawText(label, left + 5f, min(bottom - 5f, top + 17f), labelPaint)
         }
-        canvas.drawText(label, left + 5f, min(bottom - 5f, top + 17f), labelPaint)
+        canvas.drawRoundRect(RectF(left, top, right, bottom), 7f, 7f, borderPaint)
     }
 
     fun setMode(mode: Mode) { tag = mode; invalidate() }
+
+    /** Shows the actual entered text inside the placement frame while editing. */
+    fun setTextPreview(text: String, textSize: Int = 36) {
+        previewText = text
+        // Keep the preview legible in the small player while reflecting size changes.
+        previewTextSizePx = (textSize * (height.coerceAtLeast(1) / 360f)).coerceIn(12f, 42f)
+        previewTextPaint.textSize = previewTextSizePx
+        previewOutlinePaint.textSize = previewTextSizePx
+        invalidate()
+    }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (visibility != VISIBLE || width <= 0 || height <= 0) return false

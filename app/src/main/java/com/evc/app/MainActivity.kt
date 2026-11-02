@@ -1300,6 +1300,11 @@ class MainActivity : Activity() {
         }
         placementOverlay.setMode(mode)
         placementOverlay.setSelection(x, y, w, h)
+        if (mode == PlacementOverlayView.Mode.TEXT) {
+            val enteredText = findViewById<EditText>(R.id.overlayTextInput).text.toString()
+            val enteredSize = findViewById<EditText>(R.id.overlayTextSizeInput).text.toString().toIntOrNull() ?: 36
+            placementOverlay.setTextPreview(enteredText, enteredSize)
+        }
         placementOverlay.visibility = View.VISIBLE
         placementOverlay.bringToFront()
         statusText.text = when (mode) {
