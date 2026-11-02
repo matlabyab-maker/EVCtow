@@ -1204,7 +1204,15 @@ class MainActivity : Activity() {
                     graph.add("[$current]$draw[evc_text_out]")
                     current = "evc_text_out"
                 }
-                val args = mutableListOf("-y", "-i", baseFile.absolutePath)
+                // Keep the text/overlay export within the memory limits of older 32-bit ARM phones.
+                // FFmpeg's default filter and x264 look-ahead threads can otherwise trigger a process kill.
+                val args = mutableListOf(
+                    "-y",
+                    "-filter_threads", "1",
+                    "-filter_complex_threads", "1",
+                    "-threads", "1",
+                    "-i", baseFile.absolutePath
+                )
                 var nextInputIndex = 1
                 if (overlayFile != null) {
                     args.addAll(listOf("-stream_loop", "-1", "-i", overlayFile.absolutePath))
@@ -1223,9 +1231,17 @@ class MainActivity : Activity() {
                 } else {
                     args.addAll(listOf("-map", "0:a?", "-c:a", "copy"))
                 }
-                args.addAll(listOf("-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"))
+                args.addAll(listOf(
+                    "-c:v", "libx264",
+                    "-preset", "ultrafast",
+                    "-tune", "fastdecode",
+                    "-threads", "1",
+                    "-x264-params", "threads=1:lookahead_threads=1:sync-lookahead=0:rc-lookahead=0",
+                    "-crf", "20",
+                    "-pix_fmt", "yuv420p"
+                ))
                 if (!outputContainerMatroska) args.addAll(listOf("-movflags", "+faststart"))
-                args.addAll(listOf("-max_muxing_queue_size", "2048", "-f", if (outputContainerMatroska) "matroska" else "mp4", output.absolutePath))
+                args.addAll(listOf("-max_muxing_queue_size", "512", "-f", if (outputContainerMatroska) "matroska" else "mp4", output.absolutePath))
                 val session = FFmpegKit.executeWithArguments(args.toTypedArray())
                 if (!ReturnCode.isSuccess(session.returnCode) || !output.exists() || output.length() == 0L) {
                     throw IllegalStateException("ساخت خروجی متن/ویدیو ناموفق بود: ${session.allLogsAsString.takeLast(1400)}")

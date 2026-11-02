@@ -133,3 +133,9 @@ Added a prominent “خروجی گرفتن از تغییرات افکت‌ها�
 ## Version 0.2.98
 
 The video-effects panel and its controls (regional blur, noise, sharpening, and effects-export buttons) have been removed temporarily to isolate the reported app shutdown. Text and overlay-video placement controls remain. Effects will be reintroduced one at a time after the baseline version is verified.
+
+
+## Version 0.2.99 — Lower-memory text/overlay export
+- Limited FFmpeg filter and encoder threading to one thread for text/video/audio overlay export.
+- Switched to the ultrafast x264 preset and disabled encoder look-ahead to reduce memory pressure on 32-bit ARM devices.
+- Reduced the muxing queue limit. This is a targeted stability change; it does not guarantee a fix without device testing or a crash log.
