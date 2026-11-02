@@ -15,8 +15,8 @@ android {
         ndk {
             abiFilters += listOf("armeabi-v7a")
         }
-        versionCode = 300
-        versionName = "0.2.100"
+        versionCode = 301
+        versionName = "0.2.101"
     }
 
     buildTypes {
@@ -36,9 +36,9 @@ android {
 }
 
 dependencies {
-    implementation("androidx.media3:media3-transformer:1.5.1")
-    implementation("androidx.media3:media3-effect:1.5.1")
-    implementation("androidx.media3:media3-common:1.5.1")
+    implementation("androidx.media3:media3-transformer:1.6.1")
+    implementation("androidx.media3:media3-effect:1.6.1")
+    implementation("androidx.media3:media3-common:1.6.1")
     // FFmpeg muxing enables Matroska (MKV) output while copying existing streams.
     implementation("dev.ffmpegkit-maintained:ffmpeg-kit-full:6.0.4")
 }
