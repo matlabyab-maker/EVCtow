@@ -1,12 +1,14 @@
 # EVCtow — Android video editor
 
-**Project version:** 0.2.82  
+**Project version:** 0.2.83  
 **Android minimum SDK:** 24 (Android 7.0)  
 **Build:** GitHub Actions / Gradle 8.9 / JDK 17
 
 ## What is included
 
 This is a cleaned Android Studio project based on the supplied EVC 0.2.81 project. It preserves the existing app source and resources, including the timeline/storyboard editing workflow, crop-related functionality, color-effect controls, and the current MP4/MKV output paths.
+
+This release packages native libraries for **32-bit ARM (`armeabi-v7a`) only**. This should reduce the APK size for compatible phones, but it will not install on devices that require 64-bit ARM (`arm64-v8a`) or x86/x86-64 libraries.
 
 The app's displayed name and Gradle root project name are now **EVCtow**. The Android application ID remains `com.evc.app` to avoid an unrelated package-identity change.
 
@@ -19,7 +21,7 @@ It is configured to run on:
 - pull requests targeting any branch;
 - manual launch through **Actions → EVCtow Android Build → Run workflow**.
 
-On success, the workflow uploads an artifact named `EVCtow-debug-apk` containing the debug APK.
+On success, the workflow uploads an artifact named `EVCtow-0.2.83-ARM32-debug-apk` containing the debug APK.
 
 ## Uploading to a new repository
 

@@ -11,8 +11,12 @@ android {
         applicationId = "com.evc.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 282
-        versionName = "0.2.82"
+        // This release targets only 32-bit ARM devices to reduce APK size.
+        ndk {
+            abiFilters += listOf("armeabi-v7a")
+        }
+        versionCode = 283
+        versionName = "0.2.83"
     }
 
     buildTypes {
