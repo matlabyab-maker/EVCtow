@@ -9,12 +9,12 @@ import android.view.View
 import kotlin.math.max
 import kotlin.math.min
 
-/** Transparent player overlay used to place blur, text, and PiP video by dragging. */
+/** Transparent player overlay used to place text and PiP video by dragging. */
 class PlacementOverlayView(
     context: Context,
     private val onPositionChanged: (xPercent: Int, yPercent: Int) -> Unit
 ) : View(context) {
-    enum class Mode { NONE, BLUR, TEXT, VIDEO }
+    enum class Mode { NONE, TEXT, VIDEO }
 
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -50,8 +50,7 @@ class PlacementOverlayView(
         val top = height * yPercent / 100f
         val right = min(width.toFloat(), left + width * widthPercent / 100f)
         val bottom = min(height.toFloat(), top + height * heightPercent / 100f)
-        val color = when (tag as? Mode ?: Mode.BLUR) {
-            Mode.BLUR -> 0xFFFFD21F.toInt()
+        val color = when (tag as? Mode ?: Mode.NONE) {
             Mode.TEXT -> 0xFFD7A6FF.toInt()
             Mode.VIDEO -> 0xFF43D9A3.toInt()
             Mode.NONE -> 0xFF70AEFF.toInt()
@@ -61,8 +60,7 @@ class PlacementOverlayView(
         labelPaint.color = color
         canvas.drawRoundRect(RectF(left, top, right, bottom), 7f, 7f, fillPaint)
         canvas.drawRoundRect(RectF(left, top, right, bottom), 7f, 7f, borderPaint)
-        val label = when (tag as? Mode ?: Mode.BLUR) {
-            Mode.BLUR -> "بلوری • بکش"
+        val label = when (tag as? Mode ?: Mode.NONE) {
             Mode.TEXT -> "متن • بکش"
             Mode.VIDEO -> "ویدیوی رویی • بکش"
             Mode.NONE -> ""

@@ -29,7 +29,6 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
@@ -131,10 +130,6 @@ class MainActivity : Activity() {
         playerContainer.addView(cropOverlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         placementOverlay = PlacementOverlayView(this) { xPct, yPct ->
             when (placementMode) {
-                PlacementOverlayView.Mode.BLUR -> {
-                    findViewById<EditText>(R.id.blurXInput).setText(xPct.toString())
-                    findViewById<EditText>(R.id.blurYInput).setText(yPct.toString())
-                }
                 PlacementOverlayView.Mode.TEXT -> {
                     findViewById<EditText>(R.id.overlayTextXInput).setText(xPct.toString())
                     findViewById<EditText>(R.id.overlayTextYInput).setText(yPct.toString())
@@ -148,12 +143,6 @@ class MainActivity : Activity() {
         }
         placementOverlay.visibility = View.GONE
         playerContainer.addView(placementOverlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        findViewById<Button>(R.id.placeBlurOnPlayerButton).setOnClickListener {
-            val blurCheck = findViewById<CheckBox>(R.id.blurRegionCheck)
-            if (!blurCheck.isChecked) blurCheck.isChecked = true
-            updateVideoEffectsUi()
-            activatePlacementMode(PlacementOverlayView.Mode.BLUR)
-        }
         findViewById<Button>(R.id.placeTextOnPlayerButton).setOnClickListener { activatePlacementMode(PlacementOverlayView.Mode.TEXT) }
         findViewById<Button>(R.id.placeVideoOnPlayerButton).setOnClickListener { activatePlacementMode(PlacementOverlayView.Mode.VIDEO) }
         findViewById<Button>(R.id.hidePlacementOverlayButton).setOnClickListener { placementMode = PlacementOverlayView.Mode.NONE; placementOverlay.visibility = View.GONE }
@@ -258,15 +247,6 @@ class MainActivity : Activity() {
                 Toast.makeText(this, "متن فعال شد؛ محل آن را روی پلیر تعیین کنید", Toast.LENGTH_LONG).show()
             }
         }
-        findViewById<Button>(R.id.exportVideoEffectsButton).setOnClickListener { exportVideoEffects() }
-        findViewById<Button>(R.id.exportVideoEffectsTopButton).setOnClickListener { exportVideoEffects() }
-        val effectChecks = listOf(
-            findViewById<CheckBox>(R.id.blurRegionCheck),
-            findViewById<CheckBox>(R.id.addNoiseCheck),
-            findViewById<CheckBox>(R.id.sharpenCheck)
-        )
-        effectChecks.forEach { check -> check.setOnCheckedChangeListener { _, _ -> updateVideoEffectsUi() } }
-        updateVideoEffectsUi()
         findViewById<Button>(R.id.pickOverlayVideoButton).setOnClickListener {
             statusText.text = "در حال باز کردن انتخاب‌گر ویدیوی رویی…"
             chooseOverlayVideo()
@@ -1303,143 +1283,8 @@ class MainActivity : Activity() {
     }
 
     /** Keeps effect selection and the blur controls visibly synchronized. Effects apply only to exported output. */
-    private fun updateVideoEffectsUi() {
-        val blur = findViewById<CheckBox>(R.id.blurRegionCheck).isChecked
-        val noise = findViewById<CheckBox>(R.id.addNoiseCheck).isChecked
-        val sharpen = findViewById<CheckBox>(R.id.sharpenCheck).isChecked
-        listOf(R.id.blurXInput, R.id.blurYInput, R.id.blurWInput, R.id.blurHInput).forEach { id ->
-            findViewById<EditText>(id).isEnabled = blur
-            findViewById<EditText>(id).alpha = if (blur) 1f else 0.45f
-        }
-        findViewById<Button>(R.id.placeBlurOnPlayerButton).alpha = if (blur) 1f else 0.7f
-        val selected = mutableListOf<String>()
-        if (blur) selected.add("بلوری ناحیه")
-        if (noise) selected.add("نویز")
-        if (sharpen) selected.add("شارپن")
-        val label = findViewById<TextView>(R.id.effectSelectionStatus)
-        if (selected.isEmpty()) {
-            label.text = "وضعیت: هیچ افکتی انتخاب نشده؛ خروجی بدون این افکت‌ها ساخته نمی‌شود."
-            label.setTextColor(Color.parseColor("#FFE2A8"))
-        } else {
-            label.text = "فعال برای خروجی (${selected.size}): ${selected.joinToString("، ")}\nبرای اجرا، «اعمال افکت‌ها و ساخت خروجی» را بزنید."
-            label.setTextColor(Color.parseColor("#72E2B7"))
-        }
-        findViewById<Button>(R.id.exportVideoEffectsButton).text =
-            if (selected.isEmpty()) "ابتدا افکت انتخاب کنید" else "ساخت خروجی با ${selected.size} افکت انتخاب‌شده"
-    }
 
     /** Applies selected FFmpeg video filters to the full video, with optional rectangular blur. */
-    private fun exportVideoEffects() {
-        val sourceUri = selectedUri
-        if (sourceUri == null) {
-            Toast.makeText(this, "ابتدا یک ویدیو انتخاب کنید", Toast.LENGTH_LONG).show()
-            return
-        }
-        val blur = findViewById<CheckBox>(R.id.blurRegionCheck).isChecked
-        val noise = findViewById<CheckBox>(R.id.addNoiseCheck).isChecked
-        val sharpen = findViewById<CheckBox>(R.id.sharpenCheck).isChecked
-        if (!blur && !noise && !sharpen) {
-            Toast.makeText(this, "حداقل یک افکت را انتخاب کنید", Toast.LENGTH_LONG).show()
-            return
-        }
-        fun percent(id: Int, fallback: Int): Int = findViewById<EditText>(id).text.toString().toIntOrNull()?.coerceIn(0, 100) ?: fallback
-        val x = percent(R.id.blurXInput, 10)
-        val y = percent(R.id.blurYInput, 10)
-        val w = percent(R.id.blurWInput, 25)
-        val h = percent(R.id.blurHInput, 25)
-        if (blur && (w < 1 || h < 1 || x + w > 100 || y + h > 100)) {
-            Toast.makeText(this, "کادر بلوری نامعتبر است؛ X+W و Y+H نباید از ۱۰۰ بیشتر شوند", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        val button = findViewById<Button>(R.id.exportVideoEffectsButton)
-        button.isEnabled = false
-        statusText.text = "در حال اعمال افکت‌های ویدیو و رمزگذاری مجدد…"
-        worker.execute {
-            var sourceFile: File? = null
-            var output: File? = null
-            var error: String? = null
-            try {
-                sourceFile = copyUriToCache(sourceUri, "evc_effect_source")
-                val ext = outputExtension()
-                output = File(cacheDir, "evc_effects_${System.currentTimeMillis()}.$ext")
-                val graph = mutableListOf<String>()
-                val filters = mutableListOf<String>()
-                // ARM32 devices can be killed by the OS while processing full-resolution frames.
-                // Spatial-only noise avoids temporal frame buffering; moderate sharpening lowers work.
-                if (noise) filters.add("noise=alls=8:allf=u")
-                if (sharpen) filters.add("unsharp=5:5:0.35:5:5:0.0")
-                val args = mutableListOf("-y", "-hide_banner", "-threads", "1", "-filter_threads", "1", "-filter_complex_threads", "1", "-i", sourceFile.absolutePath)
-                // Bound output/filter-frame memory on 32-bit devices. Aspect ratio is preserved;
-                // large landscape or portrait sources are scaled to fit within 1280x720.
-                val safeScale = "scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2"
-                if (blur) {
-                    graph.add("[0:v]$safeScale,split=2[evc_base][evc_blur_src]")
-                    graph.add("[evc_blur_src]crop=w='max(2,2*floor(iw*$w/200))':h='max(2,2*floor(ih*$h/200))':x='2*floor(iw*$x/200)':y='2*floor(ih*$y/200)',boxblur=8:1[evc_blurred]")
-                    graph.add("[evc_base][evc_blurred]overlay=x='2*floor(main_w*$x/200)':y='2*floor(main_h*$y/200)'[evc_fx0]")
-                    if (filters.isNotEmpty()) graph.add("[evc_fx0]${filters.joinToString(",")}[evc_vout]")
-                    val finalLabel = if (filters.isNotEmpty()) "evc_vout" else "evc_fx0"
-                    args.addAll(listOf("-filter_complex", graph.joinToString(";"), "-map", "[$finalLabel]"))
-                } else {
-                    val safeFilters = mutableListOf(safeScale).apply { addAll(filters) }
-                    args.addAll(listOf("-vf", safeFilters.joinToString(","), "-map", "0:v:0"))
-                }
-                args.addAll(listOf("-map", "0:a?", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p", "-threads", "1", "-c:a", "copy"))
-                if (!outputContainerMatroska) args.addAll(listOf("-movflags", "+faststart"))
-                args.addAll(listOf("-max_muxing_queue_size", "2048", "-f", if (outputContainerMatroska) "matroska" else "mp4", output.absolutePath))
-                val session = FFmpegKit.executeWithArguments(args.toTypedArray())
-                if (!ReturnCode.isSuccess(session.returnCode) || !output.exists() || output.length() == 0L) {
-                    throw IllegalStateException("ساخت خروجی افکت ناموفق بود: ${session.allLogsAsString.takeLast(1400)}")
-                }
-            } catch (e: OutOfMemoryError) {
-                error = "حافظهٔ دستگاه برای این افکت کافی نبود؛ برنامه را ببندید و دوباره با یک افکت در هر بار امتحان کنید"
-                output?.delete()
-                output = null
-                System.gc()
-            } catch (e: Exception) {
-                error = e.message ?: e.javaClass.simpleName
-                output?.delete()
-                output = null
-            } finally {
-                sourceFile?.delete()
-            }
-            mainHandler.post {
-                button.isEnabled = true
-                val result = output
-                if (result == null || !result.exists() || result.length() == 0L) {
-                    statusText.text = "ساخت خروجی افکت ناموفق بود: ${error ?: "خطای ناشناخته"}"
-                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
-                    result?.delete()
-                    return@post
-                }
-                try {
-                    val ext = outputExtension()
-                    val values = ContentValues().apply {
-                        put(MediaStore.Video.Media.DISPLAY_NAME, "EVC_effects_${System.currentTimeMillis()}.$ext")
-                        put(MediaStore.Video.Media.MIME_TYPE, outputMimeType())
-                        if (android.os.Build.VERSION.SDK_INT >= 29) {
-                            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EVC")
-                            put(MediaStore.Video.Media.IS_PENDING, 1)
-                        }
-                    }
-                    val outUri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-                        ?: throw IllegalStateException("ساخت فایل در Movies/EVC ممکن نشد")
-                    contentResolver.openOutputStream(outUri)?.use { stream -> FileInputStream(result).use { it.copyTo(stream) } }
-                        ?: throw IllegalStateException("نوشتن فایل خروجی ناموفق بود")
-                    if (android.os.Build.VERSION.SDK_INT >= 29) {
-                        contentResolver.update(outUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
-                    }
-                    result.delete()
-                    statusText.text = "افکت‌ها اعمال شدند؛ فایل در Movies/EVC ذخیره شد. ویدیو رمزگذاری مجدد شده است."
-                    Toast.makeText(this, "خروجی افکت‌ها در Movies/EVC ذخیره شد", Toast.LENGTH_LONG).show()
-                } catch (e: Exception) {
-                    result.delete()
-                    statusText.text = "ذخیرهٔ خروجی افکت ناموفق بود: ${e.message ?: "خطا"}"
-                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-    }
 
     private fun activatePlacementMode(mode: PlacementOverlayView.Mode) {
         placementMode = mode
@@ -1449,7 +1294,6 @@ class MainActivity : Activity() {
         val w: Int
         val h: Int
         when (mode) {
-            PlacementOverlayView.Mode.BLUR -> { x = readPercent(R.id.blurXInput, 10); y = readPercent(R.id.blurYInput, 10); w = readPercent(R.id.blurWInput, 25).coerceAtLeast(5); h = readPercent(R.id.blurHInput, 25).coerceAtLeast(5) }
             PlacementOverlayView.Mode.TEXT -> { x = readPercent(R.id.overlayTextXInput, 5); y = readPercent(R.id.overlayTextYInput, 5); w = 40; h = 20 }
             PlacementOverlayView.Mode.VIDEO -> { x = readPercent(R.id.overlayVideoXInput, 70); y = readPercent(R.id.overlayVideoYInput, 5); w = readPercent(R.id.overlayVideoWidthInput, 25).coerceIn(5, 90); h = (w * 9 / 16).coerceAtLeast(8) }
             else -> { placementOverlay.visibility = View.GONE; return }
@@ -1459,7 +1303,6 @@ class MainActivity : Activity() {
         placementOverlay.visibility = View.VISIBLE
         placementOverlay.bringToFront()
         statusText.text = when (mode) {
-            PlacementOverlayView.Mode.BLUR -> "کادر بلوری را روی پلیر بکش؛ اندازه از W و H گرفته می‌شود"
             PlacementOverlayView.Mode.TEXT -> "جای متن را روی پلیر لمس کن و بکش؛ محل متن خودکار ثبت می‌شود"
             PlacementOverlayView.Mode.VIDEO -> "ویدیوی رویی را روی پلیر بکش؛ مختصات خودکار ثبت می‌شوند"
             else -> ""
