@@ -115,3 +115,16 @@ The workflow and project configuration have been prepared, but an Android build 
 - Disabled R8 minification and resource shrinking in the debug APK build. This avoids stripping or rewriting FFmpegKit JNI/native integration and Media3-related code while investigating reports that editing buttons close the app.
 - No new editing features were added; existing project functionality and controls are otherwise retained.
 - This is a targeted mitigation, not a verified device-level fix: the app has not been run on the user's device in this environment. If the crash persists, Android runtime Logcat is still needed to identify the exact exception.
+
+
+## Version 0.2.97 — lower-memory video effects
+- Changed noise to spatial-only mode (`allf=u`) to avoid temporal frame buffering.
+- Reduced sharpening strength to lower filter work.
+- Added an aspect-preserving scale stage before the effects, bounding the processed output to 1280×720 for 32-bit ARM stability. Large source videos therefore produce a lower-resolution effects export.
+- Retained single-thread FFmpeg processing.
+- This is a targeted mitigation for crashes during noise/sharpen/blur export, not a confirmed fix: a full Android build and device test are still required.
+
+
+## 0.2.97 — Visible effects export button
+
+Added a prominent “خروجی گرفتن از تغییرات افکت‌ها” button at the top of the video-effects panel. It runs the same export action as the existing button at the bottom, so the user does not need to scroll through all effect settings to find the export action.

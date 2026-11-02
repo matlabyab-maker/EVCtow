@@ -259,6 +259,7 @@ class MainActivity : Activity() {
             }
         }
         findViewById<Button>(R.id.exportVideoEffectsButton).setOnClickListener { exportVideoEffects() }
+        findViewById<Button>(R.id.exportVideoEffectsTopButton).setOnClickListener { exportVideoEffects() }
         val effectChecks = listOf(
             findViewById<CheckBox>(R.id.blurRegionCheck),
             findViewById<CheckBox>(R.id.addNoiseCheck),
@@ -1364,18 +1365,24 @@ class MainActivity : Activity() {
                 output = File(cacheDir, "evc_effects_${System.currentTimeMillis()}.$ext")
                 val graph = mutableListOf<String>()
                 val filters = mutableListOf<String>()
-                if (noise) filters.add("noise=alls=12:allf=t+u")
-                if (sharpen) filters.add("unsharp=5:5:0.55:5:5:0.0")
+                // ARM32 devices can be killed by the OS while processing full-resolution frames.
+                // Spatial-only noise avoids temporal frame buffering; moderate sharpening lowers work.
+                if (noise) filters.add("noise=alls=8:allf=u")
+                if (sharpen) filters.add("unsharp=5:5:0.35:5:5:0.0")
                 val args = mutableListOf("-y", "-hide_banner", "-threads", "1", "-filter_threads", "1", "-filter_complex_threads", "1", "-i", sourceFile.absolutePath)
+                // Bound output/filter-frame memory on 32-bit devices. Aspect ratio is preserved;
+                // large landscape or portrait sources are scaled to fit within 1280x720.
+                val safeScale = "scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2"
                 if (blur) {
-                    graph.add("[0:v]split=2[evc_base][evc_blur_src]")
+                    graph.add("[0:v]$safeScale,split=2[evc_base][evc_blur_src]")
                     graph.add("[evc_blur_src]crop=w='max(2,2*floor(iw*$w/200))':h='max(2,2*floor(ih*$h/200))':x='2*floor(iw*$x/200)':y='2*floor(ih*$y/200)',boxblur=8:1[evc_blurred]")
                     graph.add("[evc_base][evc_blurred]overlay=x='2*floor(main_w*$x/200)':y='2*floor(main_h*$y/200)'[evc_fx0]")
                     if (filters.isNotEmpty()) graph.add("[evc_fx0]${filters.joinToString(",")}[evc_vout]")
                     val finalLabel = if (filters.isNotEmpty()) "evc_vout" else "evc_fx0"
                     args.addAll(listOf("-filter_complex", graph.joinToString(";"), "-map", "[$finalLabel]"))
                 } else {
-                    args.addAll(listOf("-vf", filters.joinToString(","), "-map", "0:v:0"))
+                    val safeFilters = mutableListOf(safeScale).apply { addAll(filters) }
+                    args.addAll(listOf("-vf", safeFilters.joinToString(","), "-map", "0:v:0"))
                 }
                 args.addAll(listOf("-map", "0:a?", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p", "-threads", "1", "-c:a", "copy"))
                 if (!outputContainerMatroska) args.addAll(listOf("-movflags", "+faststart"))
