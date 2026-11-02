@@ -104,6 +104,9 @@ class MainActivity : Activity() {
     private var cropRightPct = 0
     private var cropBottomPct = 0
     private var cropSettingsSaved = false
+    private lateinit var cropOverlay: FreeCropOverlayView
+    private lateinit var freeCropControls: LinearLayout
+    private var freeCropMode = false
     // Applies to original-quality stream-copy exports (main export, timeline, storyboard segments).
     private var outputContainerMatroska = false
 
@@ -111,7 +114,30 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         videoView = findViewById(R.id.videoView)
-        findViewById<Button>(R.id.cropButton).setOnClickListener { showCropOptions() }
+        val playerContainer = findViewById<FrameLayout>(R.id.playerContainer)
+        cropOverlay = FreeCropOverlayView()
+        playerContainer.addView(cropOverlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        freeCropControls = findViewById(R.id.freeCropControls)
+        findViewById<Button>(R.id.cropButton).setOnClickListener { toggleFreeCropMode() }
+        findViewById<Button>(R.id.applyFreeCropButton).setOnClickListener {
+            readCropOverlay()
+            if (!validCropMargins()) return@setOnClickListener
+            cropSettingsSaved = true
+            freeCropMode = false
+            cropOverlay.visibility = View.GONE
+            freeCropControls.visibility = View.GONE
+            statusText.text = "محدودهٔ Free Crop ثبت شد: چپ $cropLeftPct٪، بالا $cropTopPct٪، راست $cropRightPct٪، پایین $cropBottomPct٪؛ برای ساخت فایل «خروجی Crop» را بزنید"
+            Toast.makeText(this, "محدودهٔ برش آزاد ثبت شد", Toast.LENGTH_SHORT).show()
+        }
+        findViewById<Button>(R.id.exportFreeCropButton).setOnClickListener {
+            if (freeCropMode) readCropOverlay()
+            if (!validCropMargins()) return@setOnClickListener
+            cropSettingsSaved = true
+            freeCropMode = false
+            cropOverlay.visibility = View.GONE
+            freeCropControls.visibility = View.GONE
+            exportCroppedVideo()
+        }
         findViewById<Button>(R.id.outputFormatButton).setOnClickListener {
             outputContainerMatroska = !outputContainerMatroska
             findViewById<Button>(R.id.outputFormatButton).text = if (outputContainerMatroska) "فرمت: MKV" else "فرمت: MP4"
@@ -1318,97 +1344,115 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Configure and save crop margins, then export the actual cropped video through Media3 Transformer. */
-    private fun showCropOptions() {
+    /** Free Crop: drag the four corner handles directly over the player preview. */
+    private fun toggleFreeCropMode() {
         if (selectedUri == null) {
             Toast.makeText(this, "ابتدا یک ویدیو انتخاب کنید", Toast.LENGTH_LONG).show()
             return
         }
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(28, 12, 28, 4)
+        freeCropMode = !freeCropMode
+        if (freeCropMode) {
+            cropOverlay.setMargins(cropLeftPct, cropTopPct, cropRightPct, cropBottomPct)
+            cropOverlay.visibility = View.VISIBLE
+            freeCropControls.visibility = View.VISIBLE
+            cropSettingsSaved = false
+            statusText.text = "Free Crop فعال است: چهار دستگیرهٔ گوشهٔ کادر را روی پلیر بکشید؛ سپس «ثبت محدوده» یا «خروجی Crop» را بزنید"
+        } else {
+            cropOverlay.visibility = View.GONE
+            freeCropControls.visibility = View.GONE
+            statusText.text = "حالت Free Crop بسته شد"
         }
-        val info = TextView(this).apply {
-            text = "برش آزاد: مقدار هر لبه را جداگانه تنظیم کنید. پس از ثبت، با «خروجی Crop» برش روی فایل واقعی اعمال می‌شود."
-            textSize = 14f
-            setTextColor(Color.WHITE)
-        }
-        panel.addView(info)
-        val sliders = mutableListOf<SeekBar>()
-        val values = mutableListOf<TextView>()
-        val labels = listOf("چپ", "بالا", "راست", "پایین")
-        val initial = listOf(cropLeftPct, cropTopPct, cropRightPct, cropBottomPct)
-        labels.forEachIndexed { index, label ->
-            val row = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            val value = TextView(this).apply { text = "$label: ${initial[index]}٪"; setTextColor(Color.WHITE); textSize = 13f }
-            val slider = SeekBar(this).apply { max = 45; progress = initial[index] }
-            values.add(value); sliders.add(slider)
-            slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    value.text = "$label: ${progress}٪"
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-            })
-            row.addView(value); row.addView(slider)
-            panel.addView(row)
-        }
-        val presets = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        fun presetButton(text: String, l: Int, t: Int, r: Int, b: Int) {
-            val button = Button(this).apply {
-                this.text = text
-                textSize = 10f
-                setOnClickListener {
-                    val preset = listOf(l, t, r, b)
-                    sliders.forEachIndexed { i, seek -> seek.progress = preset[i] }
-                }
-            }
-            presets.addView(button, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        }
-        presetButton("بدون برش", 0, 0, 0, 0)
-        presetButton("مرکزی", 10, 10, 10, 10)
-        presetButton("عمودی", 22, 0, 22, 0)
-        panel.addView(presets)
+    }
 
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Crop • برش آزاد")
-            .setView(ScrollView(this).apply { addView(panel) })
-            .setPositiveButton("ثبت برش", null)
-            .setNeutralButton("خروجی Crop", null)
-            .setNegativeButton("لغو", null)
-            .create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val m = sliders.map { it.progress }
-                if (m[0] + m[2] >= 90 || m[1] + m[3] >= 90) {
-                    Toast.makeText(this, "باید بخشی از تصویر در هر دو جهت باقی بماند", Toast.LENGTH_LONG).show()
-                    return@setOnClickListener
-                }
-                cropLeftPct = m[0]; cropTopPct = m[1]; cropRightPct = m[2]; cropBottomPct = m[3]
-                cropSettingsSaved = true
-                // Keep the preview visibly marked as modified; actual crop is applied during export.
-                val zoomX = (100f / (100 - cropLeftPct - cropRightPct)).coerceIn(1f, 2.5f)
-                val zoomY = (100f / (100 - cropTopPct - cropBottomPct)).coerceIn(1f, 2.5f)
-                videoView.scaleX = zoomX
-                videoView.scaleY = zoomY
-                playerColorPreview.scaleX = zoomX
-                playerColorPreview.scaleY = zoomY
-                statusText.text = "Crop ثبت شد: چپ $cropLeftPct٪، بالا $cropTopPct٪، راست $cropRightPct٪، پایین $cropBottomPct٪؛ برای ساخت فایل، خروجی Crop را بزنید"
-                Toast.makeText(this, "تنظیمات برش ثبت شد", Toast.LENGTH_SHORT).show()
-            }
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                val m = sliders.map { it.progress }
-                if (m[0] + m[2] >= 90 || m[1] + m[3] >= 90) {
-                    Toast.makeText(this, "باید بخشی از تصویر در هر دو جهت باقی بماند", Toast.LENGTH_LONG).show()
-                    return@setOnClickListener
-                }
-                cropLeftPct = m[0]; cropTopPct = m[1]; cropRightPct = m[2]; cropBottomPct = m[3]
-                cropSettingsSaved = true
-                dialog.dismiss()
-                exportCroppedVideo()
-            }
+    private fun readCropOverlay() {
+        val margins = cropOverlay.getMargins()
+        cropLeftPct = margins[0]
+        cropTopPct = margins[1]
+        cropRightPct = margins[2]
+        cropBottomPct = margins[3]
+    }
+
+    private fun validCropMargins(): Boolean {
+        if (cropLeftPct + cropRightPct >= 90 || cropTopPct + cropBottomPct >= 90) {
+            Toast.makeText(this, "باید بخشی از تصویر در هر دو جهت باقی بماند", Toast.LENGTH_LONG).show()
+            return false
         }
-        dialog.show()
+        return true
+    }
+
+    private inner class FreeCropOverlayView : View(this@MainActivity) {
+        private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(67, 217, 163); style = Paint.Style.STROKE; strokeWidth = 3f }
+        private val shadePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x99000000.toInt(); style = Paint.Style.FILL }
+        private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 210, 31); style = Paint.Style.FILL }
+        private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 12f; textAlign = Paint.Align.CENTER }
+        private var left = 0.08f
+        private var top = 0.08f
+        private var right = 0.92f
+        private var bottom = 0.92f
+        private var activeCorner = -1
+        private val handleRadius get() = 16f * resources.displayMetrics.density
+
+        init { visibility = View.GONE; isClickable = true }
+
+        fun setMargins(l: Int, t: Int, r: Int, b: Int) {
+            left = (l / 100f).coerceIn(0f, 0.44f)
+            top = (t / 100f).coerceIn(0f, 0.44f)
+            right = (1f - r / 100f).coerceIn(0.56f, 1f)
+            bottom = (1f - b / 100f).coerceIn(0.56f, 1f)
+            if (right - left < 0.12f) { left = 0.08f; right = 0.92f }
+            if (bottom - top < 0.12f) { top = 0.08f; bottom = 0.92f }
+            invalidate()
+        }
+
+        fun getMargins(): List<Int> = listOf(
+            (left * 100).toInt().coerceIn(0, 44),
+            (top * 100).toInt().coerceIn(0, 44),
+            ((1f - right) * 100).toInt().coerceIn(0, 44),
+            ((1f - bottom) * 100).toInt().coerceIn(0, 44)
+        )
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            if (width <= 0 || height <= 0) return
+            val l = left * width; val t = top * height; val r = right * width; val b = bottom * height
+            canvas.drawRect(0f, 0f, width.toFloat(), t, shadePaint)
+            canvas.drawRect(0f, b, width.toFloat(), height.toFloat(), shadePaint)
+            canvas.drawRect(0f, t, l, b, shadePaint)
+            canvas.drawRect(r, t, width.toFloat(), b, shadePaint)
+            canvas.drawRect(l, t, r, b, borderPaint)
+            val points = arrayOf(l to t, r to t, l to b, r to b)
+            points.forEach { (x, y) -> canvas.drawCircle(x, y, handleRadius, handlePaint); canvas.drawCircle(x, y, handleRadius * 0.48f, borderPaint) }
+            canvas.drawText("گوشه‌ها را بکشید", width / 2f, (t + b) / 2f, labelPaint)
+        }
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            val x = event.x.coerceIn(0f, width.toFloat()); val y = event.y.coerceIn(0f, height.toFloat())
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    val corners = arrayOf(left * width to top * height, right * width to top * height, left * width to bottom * height, right * width to bottom * height)
+                    activeCorner = corners.indices.minByOrNull { i ->
+                        val dx = corners[i].first - x; val dy = corners[i].second - y; dx * dx + dy * dy
+                    } ?: -1
+                    val nearest = corners.getOrNull(activeCorner)
+                    if (nearest == null || kotlin.math.hypot((nearest.first - x).toDouble(), (nearest.second - y).toDouble()) > handleRadius * 2.5) activeCorner = -1
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val minX = 0.08f; val minY = 0.08f
+                    when (activeCorner) {
+                        0 -> { left = (x / width).coerceIn(0f, right - minX); top = (y / height).coerceIn(0f, bottom - minY) }
+                        1 -> { right = (x / width).coerceIn(left + minX, 1f); top = (y / height).coerceIn(0f, bottom - minY) }
+                        2 -> { left = (x / width).coerceIn(0f, right - minX); bottom = (y / height).coerceIn(top + minY, 1f) }
+                        3 -> { right = (x / width).coerceIn(left + minX, 1f); bottom = (y / height).coerceIn(top + minY, 1f) }
+                    }
+                    invalidate(); return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { activeCorner = -1; performClick(); return true }
+            }
+            return true
+        }
+
+        override fun performClick(): Boolean { super.performClick(); return true }
     }
 
     private fun exportCroppedVideo() {

@@ -1,15 +1,20 @@
 <?xml version='1.0' encoding='utf-8'?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="#07142F" android:padding="3dp">
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/mainScrollView" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="false" android:scrollbars="vertical" android:fadeScrollbars="false" android:overScrollMode="ifContentScrolls">
+<LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#07142F" android:padding="3dp">
 
     <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="EVC • استودیو ویرایش ویدیو" android:textColor="#FFFFFF" android:textSize="16sp" android:textStyle="bold" android:gravity="center" android:paddingTop="0dp" android:paddingBottom="0dp" />
 
     <TextView android:id="@+id/statusText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="یک ویدیو انتخاب کنید تا ۱۲۰ فریم در ۸ ردیف ساخته شود" android:textColor="#B9D7FF" android:textSize="9sp" android:gravity="center" android:paddingBottom="1dp" />
 
-    <FrameLayout android:layout_width="match_parent" android:layout_height="180dp" android:background="#000000">
+    <FrameLayout android:id="@+id/playerContainer" android:layout_width="match_parent" android:layout_height="180dp" android:background="#000000">
         <VideoView android:id="@+id/videoView" android:layout_width="match_parent" android:layout_height="match_parent" />
         <ImageView android:id="@+id/playerColorPreview" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="fitCenter" android:contentDescription="پیش‌نمایش رنگ فریم فعلی" android:visibility="gone" />
         <TextView android:id="@+id/emptyHint" android:layout_width="match_parent" android:layout_height="match_parent" android:text="▶  پخش‌کنندهٔ EVC" android:textColor="#D7E7FF" android:textSize="20sp" android:gravity="center" android:background="#101F3D" />
     </FrameLayout>
+    <LinearLayout android:id="@+id/freeCropControls" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:visibility="gone" android:gravity="center" android:padding="2dp">
+        <Button android:id="@+id/applyFreeCropButton" android:layout_width="0dp" android:layout_height="38dp" android:layout_weight="1" android:text="ثبت محدوده" android:textSize="10sp" android:textColor="#07142F" android:backgroundTint="#FFD21F" android:minHeight="0dp" android:minWidth="0dp" />
+        <Button android:id="@+id/exportFreeCropButton" android:layout_width="0dp" android:layout_height="38dp" android:layout_weight="1" android:text="خروجی Crop" android:textSize="10sp" android:textColor="#07142F" android:backgroundTint="#43D9A3" android:minHeight="0dp" android:minWidth="0dp" />
+    </LinearLayout>
 
 
     
@@ -69,9 +74,8 @@
         <Button android:id="@+id/restoreTimelineButton" android:layout_width="wrap_content" android:layout_height="66dp" android:layout_marginStart="2dp" android:text="بازگردانی قطعات" android:textSize="9sp" android:textColor="#07142F" android:backgroundTint="#43D9A3" android:minHeight="0dp" />
     </LinearLayout>
 
-    <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:fillViewport="false" android:scrollbars="vertical">
-        <LinearLayout android:id="@+id/storyboardRows" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
-    </ScrollView>
+    <TextView android:id="@+id/storyboardScrollHint" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="استوری‌بورد • ۸ ردیف؛ برای دیدن همهٔ اسلایدها صفحه را عمودی بالا و پایین بکشید" android:textColor="#FFD21F" android:textSize="10sp" android:gravity="center" android:paddingTop="4dp" android:paddingBottom="4dp" />
+    <LinearLayout android:id="@+id/storyboardRows" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
 
     <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="تنظیم دستی رنگ خروجی (ضریب هر کانال: ۰ تا ۲)" android:textColor="#FFFFFF" android:textSize="9sp" android:gravity="center" android:paddingTop="0dp" />
 
@@ -109,3 +113,4 @@
 
 
 </LinearLayout>
+</ScrollView>

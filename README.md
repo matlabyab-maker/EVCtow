@@ -1,6 +1,6 @@
 # EVCtow — Android video editor
 
-**Project version:** 0.2.83  
+**Project version:** 0.2.85  
 **Android minimum SDK:** 24 (Android 7.0)  
 **Build:** GitHub Actions / Gradle 8.9 / JDK 17
 
@@ -21,7 +21,7 @@ It is configured to run on:
 - pull requests targeting any branch;
 - manual launch through **Actions → EVCtow Android Build → Run workflow**.
 
-On success, the workflow uploads an artifact named `EVCtow-0.2.83-ARM32-debug-apk` containing the debug APK.
+On success, the workflow uploads an artifact named `EVCtow-0.2.85-ARM32-debug-apk` containing the debug APK.
 
 ## Uploading to a new repository
 
@@ -35,3 +35,14 @@ This ZIP intentionally does not include the old `.git` directory, build outputs,
 ## Important verification note
 
 The workflow and project configuration have been prepared, but an Android build has not been run in this environment. A green GitHub Actions result is still required to verify compilation and APK creation. The existing FFmpegKit dependency requires `minSdk 24`, so Android 6 / API 23 is not supported.
+
+
+## Version 0.2.84
+- Made the entire main screen vertically scrollable so all storyboard rows and lower controls can be reached on shorter displays. The storyboard grid now expands to its full height inside the page scroll container.
+- Kept only the `armeabi-v7a` (32-bit ARM) target ABI.
+
+
+## Version 0.2.85
+- Added Free Crop directly on the player: tap Crop to show an adjustable rectangle with four draggable corner handles.
+- Added separate controls to save the selected crop area or export the cropped video.
+- Kept the existing Media3 crop export path and the 32-bit ARM-only ABI target.
