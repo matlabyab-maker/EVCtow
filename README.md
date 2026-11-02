@@ -1,6 +1,6 @@
 # EVCtow — Android video editor
 
-**Project version:** 0.2.89  
+**Project version:** 0.2.93  
 **Android minimum SDK:** 24 (Android 7.0)  
 **Build:** GitHub Actions / Gradle 8.9 / JDK 17
 
@@ -21,7 +21,7 @@ It is configured to run on:
 - pull requests targeting any branch;
 - manual launch through **Actions → EVCtow Android Build → Run workflow**.
 
-On success, the workflow uploads an artifact named `EVCtow-0.2.89-ARM32-TextVideoOverlay-debug-apk` containing the debug APK.
+On success, the workflow uploads an artifact named `EVCtow-0.2.93-ARM32-TextVideoAudio-Activation-debug-apk` containing the debug APK.
 
 ## Uploading to a new repository
 
@@ -85,3 +85,20 @@ The workflow and project configuration have been prepared, but an Android build 
 - Adds draggable placement selection directly on the player for blur region, text, and picture-in-picture video; dragging updates the corresponding X/Y fields automatically.
 - Retains existing project features and ARM32 (`armeabi-v7a`) target.
 - Android compilation must be confirmed by GitHub Actions.
+
+
+## Version 0.2.92 — Clearer video-effects controls
+- Reorganized blur, noise, and sharpen into separate RTL rows with plain-language explanations.
+- Added a visible selected-effects status and an export button label that reflects the selection.
+- Explicitly explains that effects are applied to the exported file and are not shown as a live preview.
+- Blur position/size fields are visibly enabled only when regional blur is selected; tapping “جای بلوری” selects blur before opening its draggable placement box.
+- Preserves the existing ARM32 target and other editing features.
+
+
+## Version 0.2.93 — Text / overlay video / audio activation
+
+- Added an explicit **Apply text / video / selected audio and create output** button, wired to the same export path as the final output button.
+- The combined output action now accepts text only, overlay video only, selected external audio only, or combinations of these.
+- Selected external audio is encoded as the output soundtrack and replaces the source soundtrack in this combined-export path. Use **Build track output** if the intention is to add the external audio as a separate audio track instead.
+- Clarified the UI labels so track muxing is not confused with the combined text/video/audio export.
+- Build still needs verification in GitHub Actions on a real Android toolchain; this source package has not been installed and tested on a device here.

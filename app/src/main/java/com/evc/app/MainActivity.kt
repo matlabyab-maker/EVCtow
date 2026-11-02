@@ -148,7 +148,12 @@ class MainActivity : Activity() {
         }
         placementOverlay.visibility = View.GONE
         playerContainer.addView(placementOverlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        findViewById<Button>(R.id.placeBlurOnPlayerButton).setOnClickListener { activatePlacementMode(PlacementOverlayView.Mode.BLUR) }
+        findViewById<Button>(R.id.placeBlurOnPlayerButton).setOnClickListener {
+            val blurCheck = findViewById<CheckBox>(R.id.blurRegionCheck)
+            if (!blurCheck.isChecked) blurCheck.isChecked = true
+            updateVideoEffectsUi()
+            activatePlacementMode(PlacementOverlayView.Mode.BLUR)
+        }
         findViewById<Button>(R.id.placeTextOnPlayerButton).setOnClickListener { activatePlacementMode(PlacementOverlayView.Mode.TEXT) }
         findViewById<Button>(R.id.placeVideoOnPlayerButton).setOnClickListener { activatePlacementMode(PlacementOverlayView.Mode.VIDEO) }
         findViewById<Button>(R.id.hidePlacementOverlayButton).setOnClickListener { placementMode = PlacementOverlayView.Mode.NONE; placementOverlay.visibility = View.GONE }
@@ -234,7 +239,15 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.addAudioButton).setOnClickListener { chooseExternalAudio() }
         findViewById<Button>(R.id.addSubtitleButton).setOnClickListener { chooseExternalSubtitle() }
         findViewById<Button>(R.id.muxTracksButton).setOnClickListener { exportWithExternalTracks() }
+        findViewById<Button>(R.id.addTextButton).setOnClickListener { exportTextAndVideoOverlay() }
         findViewById<Button>(R.id.exportVideoEffectsButton).setOnClickListener { exportVideoEffects() }
+        val effectChecks = listOf(
+            findViewById<CheckBox>(R.id.blurRegionCheck),
+            findViewById<CheckBox>(R.id.addNoiseCheck),
+            findViewById<CheckBox>(R.id.sharpenCheck)
+        )
+        effectChecks.forEach { check -> check.setOnCheckedChangeListener { _, _ -> updateVideoEffectsUi() } }
+        updateVideoEffectsUi()
         findViewById<Button>(R.id.pickOverlayVideoButton).setOnClickListener { chooseOverlayVideo() }
         findViewById<Button>(R.id.exportOverlayButton).setOnClickListener { exportTextAndVideoOverlay() }
         findViewById<Button>(R.id.joinAfterButton).setOnClickListener { chooseVideosToAppend() }
@@ -507,8 +520,8 @@ class MainActivity : Activity() {
             loadSelectedVideo(uri, true)
         } else if (requestCode == PICK_EXTERNAL_AUDIO) {
             externalAudioUri = data.data ?: return
-            findViewById<Button>(R.id.addAudioButton).text = "صدا ✓"
-            statusText.text = "فایل صوتی انتخاب شد؛ برای افزودن آن به ویدیو، «ساخت خروجی» را بزنید"
+            findViewById<Button>(R.id.addAudioButton).text = "صدا انتخاب شد ✓"
+            statusText.text = "فایل صوتی انتخاب شد؛ برای جایگزینی صدای ویدیوی اصلی، بخش «متن/ویدیوی رویی» را باز کنید و «ساخت خروجی متن/فیلم/صدا» را بزنید. برای افزودن آن به‌صورت ترک جداگانه، از «ساخت خروجی ترک‌ها» استفاده کنید."
         } else if (requestCode == PICK_EXTERNAL_SUBTITLE) {
             externalSubtitleUri = data.data ?: return
             findViewById<Button>(R.id.addSubtitleButton).text = "زیرنویس ✓"
@@ -1139,8 +1152,9 @@ class MainActivity : Activity() {
         }
         val text = findViewById<EditText>(R.id.overlayTextInput).text.toString().trim()
         val secondUri = overlayVideoUri
-        if (text.isEmpty() && secondUri == null) {
-            Toast.makeText(this, "متن وارد کنید یا یک ویدیوی رویی انتخاب کنید", Toast.LENGTH_LONG).show()
+        val audioUri = externalAudioUri
+        if (text.isEmpty() && secondUri == null && audioUri == null) {
+            Toast.makeText(this, "متن وارد کنید، ویدیوی رویی یا فایل صوتی انتخاب کنید", Toast.LENGTH_LONG).show()
             return
         }
         fun number(id: Int, fallback: Int, min: Int = 0, max: Int = 100): Int =
@@ -1157,16 +1171,18 @@ class MainActivity : Activity() {
         }
         val button = findViewById<Button>(R.id.exportOverlayButton)
         button.isEnabled = false
-        statusText.text = "در حال ترکیب متن و ویدیوی رویی…"
+        statusText.text = "در حال ساخت خروجی متن/ویدیو/صدا…"
         worker.execute {
             var baseFile: File? = null
             var overlayFile: File? = null
+            var audioFile: File? = null
             var textFile: File? = null
             var output: File? = null
             var error: String? = null
             try {
                 baseFile = copyUriToCache(sourceUri, "evc_overlay_base")
                 if (secondUri != null) overlayFile = copyUriToCache(secondUri, "evc_overlay_video")
+                if (audioUri != null) audioFile = copyUriToCache(audioUri, "evc_overlay_audio")
                 if (text.isNotEmpty()) {
                     textFile = File(cacheDir, "evc_overlay_text_${System.currentTimeMillis()}.txt")
                     textFile.writeText(text, Charsets.UTF_8)
@@ -1187,10 +1203,25 @@ class MainActivity : Activity() {
                     current = "evc_text_out"
                 }
                 val args = mutableListOf("-y", "-i", baseFile.absolutePath)
+                var nextInputIndex = 1
                 if (overlayFile != null) {
                     args.addAll(listOf("-stream_loop", "-1", "-i", overlayFile.absolutePath))
+                    nextInputIndex++
                 }
-                args.addAll(listOf("-filter_complex", graph.joinToString(";"), "-map", "[$current]", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "copy"))
+                val audioInputIndex = if (audioFile != null) nextInputIndex else null
+                if (audioFile != null) args.addAll(listOf("-i", audioFile.absolutePath))
+                if (graph.isNotEmpty()) {
+                    args.addAll(listOf("-filter_complex", graph.joinToString(";"), "-map", "[$current]"))
+                } else {
+                    args.addAll(listOf("-map", "0:v:0"))
+                }
+                if (audioInputIndex != null) {
+                    // The selected external audio replaces the source soundtrack; pad it to video duration.
+                    args.addAll(listOf("-map", "$audioInputIndex:a:0", "-af", "apad", "-c:a", "aac", "-b:a", "192k", "-shortest"))
+                } else {
+                    args.addAll(listOf("-map", "0:a?", "-c:a", "copy"))
+                }
+                args.addAll(listOf("-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"))
                 if (!outputContainerMatroska) args.addAll(listOf("-movflags", "+faststart"))
                 args.addAll(listOf("-max_muxing_queue_size", "2048", "-f", if (outputContainerMatroska) "matroska" else "mp4", output.absolutePath))
                 val session = FFmpegKit.executeWithArguments(args.toTypedArray())
@@ -1201,7 +1232,7 @@ class MainActivity : Activity() {
                 error = e.message ?: e.javaClass.simpleName
                 output?.delete(); output = null
             } finally {
-                baseFile?.delete(); overlayFile?.delete(); textFile?.delete()
+                baseFile?.delete(); overlayFile?.delete(); audioFile?.delete(); textFile?.delete()
             }
             mainHandler.post {
                 button.isEnabled = true
@@ -1230,7 +1261,15 @@ class MainActivity : Activity() {
                         contentResolver.update(outUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
                     }
                     result.delete()
-                    statusText.text = "متن و ویدیوی رویی ترکیب و در Movies/EVC ذخیره شدند؛ ویدیو دوباره رمزگذاری شده است."
+                    statusText.text = when {
+                        audioUri != null && text.isNotEmpty() && secondUri != null -> "متن، ویدیوی رویی و صدای انتخابی در Movies/EVC ذخیره شدند؛ صدای انتخابی جای صدای اصلی را گرفت."
+                        audioUri != null && text.isNotEmpty() -> "متن و صدای انتخابی در Movies/EVC ذخیره شدند؛ صدای انتخابی جای صدای اصلی را گرفت."
+                        audioUri != null && secondUri != null -> "ویدیوی رویی و صدای انتخابی در Movies/EVC ذخیره شدند؛ صدای انتخابی جای صدای اصلی را گرفت."
+                        audioUri != null -> "ویدیو با صدای انتخابی در Movies/EVC ذخیره شد؛ صدای انتخابی جای صدای اصلی را گرفت."
+                        text.isNotEmpty() && secondUri != null -> "متن و ویدیوی رویی ترکیب و در Movies/EVC ذخیره شدند؛ ویدیو دوباره رمزگذاری شده است."
+                        text.isNotEmpty() -> "متن روی ویدیو در Movies/EVC ذخیره شد."
+                        else -> "ویدیوی رویی در Movies/EVC ذخیره شد."
+                    }
                     Toast.makeText(this, "خروجی در Movies/EVC ذخیره شد", Toast.LENGTH_LONG).show()
                 } catch (e: Exception) {
                     result.delete()
@@ -1239,6 +1278,32 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    /** Keeps effect selection and the blur controls visibly synchronized. Effects apply only to exported output. */
+    private fun updateVideoEffectsUi() {
+        val blur = findViewById<CheckBox>(R.id.blurRegionCheck).isChecked
+        val noise = findViewById<CheckBox>(R.id.addNoiseCheck).isChecked
+        val sharpen = findViewById<CheckBox>(R.id.sharpenCheck).isChecked
+        listOf(R.id.blurXInput, R.id.blurYInput, R.id.blurWInput, R.id.blurHInput).forEach { id ->
+            findViewById<EditText>(id).isEnabled = blur
+            findViewById<EditText>(id).alpha = if (blur) 1f else 0.45f
+        }
+        findViewById<Button>(R.id.placeBlurOnPlayerButton).alpha = if (blur) 1f else 0.7f
+        val selected = mutableListOf<String>()
+        if (blur) selected.add("بلوری ناحیه")
+        if (noise) selected.add("نویز")
+        if (sharpen) selected.add("شارپن")
+        val label = findViewById<TextView>(R.id.effectSelectionStatus)
+        if (selected.isEmpty()) {
+            label.text = "وضعیت: هیچ افکتی انتخاب نشده؛ خروجی بدون این افکت‌ها ساخته نمی‌شود."
+            label.setTextColor(Color.parseColor("#FFE2A8"))
+        } else {
+            label.text = "فعال برای خروجی (${selected.size}): ${selected.joinToString("، ")}\nبرای اجرا، «اعمال افکت‌ها و ساخت خروجی» را بزنید."
+            label.setTextColor(Color.parseColor("#72E2B7"))
+        }
+        findViewById<Button>(R.id.exportVideoEffectsButton).text =
+            if (selected.isEmpty()) "ابتدا افکت انتخاب کنید" else "ساخت خروجی با ${selected.size} افکت انتخاب‌شده"
     }
 
     /** Applies selected FFmpeg video filters to the full video, with optional rectangular blur. */
