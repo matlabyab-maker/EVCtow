@@ -11,6 +11,7 @@ import android.graphics.drawable.GradientDrawable
 import android.content.ContentValues
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.media.MediaMetadataRetriever
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -28,6 +29,8 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.widget.Button
+import android.widget.CheckBox
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
@@ -96,6 +99,13 @@ class MainActivity : Activity() {
     private val PICK_MERGE_VIDEOS = 7304
     private val PICK_REFERENCE_IMAGE = 7305
     private val PICK_VECTOR_VIDEOS = 7306
+    private val PICK_EXTERNAL_AUDIO = 7307
+    private val PICK_EXTERNAL_SUBTITLE = 7308
+    private val PICK_OVERLAY_VIDEO = 7309
+    private val PICK_APPEND_VIDEOS = 7310
+    private var overlayVideoUri: Uri? = null
+    private var externalAudioUri: Uri? = null
+    private var externalSubtitleUri: Uri? = null
     private val vectorUris = mutableListOf<Uri>()
     private var referenceImageUri: Uri? = null
     // Crop margins are stored as percentages of the source frame and reused for export.
@@ -196,6 +206,13 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.exportSegmentsSeparatelyButton).setOnClickListener { exportTimelineSegmentsSeparately() }
 
         findViewById<Button>(R.id.openButton).setOnClickListener { chooseVideo() }
+        findViewById<Button>(R.id.addAudioButton).setOnClickListener { chooseExternalAudio() }
+        findViewById<Button>(R.id.addSubtitleButton).setOnClickListener { chooseExternalSubtitle() }
+        findViewById<Button>(R.id.muxTracksButton).setOnClickListener { exportWithExternalTracks() }
+        findViewById<Button>(R.id.exportVideoEffectsButton).setOnClickListener { exportVideoEffects() }
+        findViewById<Button>(R.id.pickOverlayVideoButton).setOnClickListener { chooseOverlayVideo() }
+        findViewById<Button>(R.id.exportOverlayButton).setOnClickListener { exportTextAndVideoOverlay() }
+        findViewById<Button>(R.id.joinAfterButton).setOnClickListener { chooseVideosToAppend() }
         findViewById<Button>(R.id.mergeButton).setOnClickListener { if (mergeUris.isEmpty()) chooseVideosForMerge() else mergeSelectedVideos() }
         findViewById<Button>(R.id.vectorButton).setOnClickListener { chooseVideosForVector() }
         findViewById<Button>(R.id.advancedEditButton).setOnClickListener { showAdvancedEditDialog() }
@@ -394,6 +411,21 @@ class MainActivity : Activity() {
             }
     }
 
+    private fun chooseVideosToAppend() {
+        if (selectedUri == null) {
+            Toast.makeText(this, "ابتدا ویدیوی اصلی را باز کنید؛ سپس Join را بزنید", Toast.LENGTH_LONG).show()
+            return
+        }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "video/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        try { startActivityForResult(intent, PICK_APPEND_VIDEOS) }
+        catch (_: Exception) { Toast.makeText(this, "انتخاب‌گر ویدیو در دسترس نیست", Toast.LENGTH_LONG).show() }
+    }
+
     private fun chooseVideosForMerge() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -408,7 +440,25 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (resultCode != RESULT_OK || data == null) return
-        if (requestCode == PICK_MERGE_VIDEOS) {
+        if (requestCode == PICK_APPEND_VIDEOS) {
+            val base = selectedUri
+            if (base == null) {
+                Toast.makeText(this, "ابتدا ویدیوی اصلی را انتخاب کنید", Toast.LENGTH_LONG).show()
+                return
+            }
+            val picked = mutableListOf<Uri>()
+            data.clipData?.let { clip -> for (i in 0 until clip.itemCount) picked.add(clip.getItemAt(i).uri) }
+            data.data?.let { if (it !in picked) picked.add(it) }
+            val ordered = (listOf(base) + picked).distinct()
+            if (ordered.size < 2) {
+                Toast.makeText(this, "یک یا چند ویدیوی متفاوت برای اتصال به انتهای ویدیوی اصلی انتخاب کنید", Toast.LENGTH_LONG).show()
+                return
+            }
+            mergeUris.clear(); mergeUris.addAll(ordered)
+            findViewById<Button>(R.id.mergeButton).text = "Join (${mergeUris.size})"
+            statusText.text = "ترتیب اتصال آماده است: ویدیوی اصلی اول می‌آید و ویدیوهای انتخابی به انتهای آن اضافه می‌شوند. در حال ساخت خروجی…"
+            mergeSelectedVideos()
+        } else if (requestCode == PICK_MERGE_VIDEOS) {
             val picked = mutableListOf<Uri>()
             data.clipData?.let { clip -> for (i in 0 until clip.itemCount) picked.add(clip.getItemAt(i).uri) }
             data.data?.let { if (it !in picked) picked.add(it) }
@@ -430,6 +480,18 @@ class MainActivity : Activity() {
         } else if (requestCode == REQUEST_VIDEO) {
             val uri = data.data ?: return
             loadSelectedVideo(uri, true)
+        } else if (requestCode == PICK_EXTERNAL_AUDIO) {
+            externalAudioUri = data.data ?: return
+            findViewById<Button>(R.id.addAudioButton).text = "صدا ✓"
+            statusText.text = "فایل صوتی انتخاب شد؛ برای افزودن آن به ویدیو، «ساخت خروجی» را بزنید"
+        } else if (requestCode == PICK_EXTERNAL_SUBTITLE) {
+            externalSubtitleUri = data.data ?: return
+            findViewById<Button>(R.id.addSubtitleButton).text = "زیرنویس ✓"
+            statusText.text = "زیرنویس انتخاب شد؛ برای افزودن آن به ویدیو، «ساخت خروجی» را بزنید"
+        } else if (requestCode == PICK_OVERLAY_VIDEO) {
+            overlayVideoUri = data.data ?: return
+            findViewById<Button>(R.id.pickOverlayVideoButton).text = "ویدیوی رویی ✓"
+            statusText.text = "ویدیوی دوم انتخاب شد؛ موقعیت و عرض را تنظیم کنید و خروجی بگیرید"
         } else if (requestCode == PICK_REFERENCE_IMAGE) {
             referenceImageUri = data.data ?: return
             if (selectedUri == null || videoDurationMs <= 0L) {
@@ -883,6 +945,379 @@ class MainActivity : Activity() {
         }
         statusText.text = "پیش‌نمایش رنگی‌سازی آزمایشی روی $processed اسلاید اعمال شد؛ ویدیوی اصلی و خروجی تغییر نکرده‌اند"
         Toast.makeText(this, "این نسخه فقط پیش‌نمایش اسلایدها را رنگی می‌کند؛ خروجی ویدیویی رنگی هنوز فعال نیست", Toast.LENGTH_LONG).show()
+    }
+
+    private fun chooseExternalAudio() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        try { startActivityForResult(intent, PICK_EXTERNAL_AUDIO) }
+        catch (_: Exception) { Toast.makeText(this, "انتخاب‌گر فایل صوتی در دسترس نیست", Toast.LENGTH_LONG).show() }
+    }
+
+    private fun chooseExternalSubtitle() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/x-subrip", "text/plain", "text/vtt", "application/x-ass", "application/x-ssa", "application/octet-stream"))
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        try { startActivityForResult(intent, PICK_EXTERNAL_SUBTITLE) }
+        catch (_: Exception) { Toast.makeText(this, "انتخاب‌گر زیرنویس در دسترس نیست", Toast.LENGTH_LONG).show() }
+    }
+
+    private fun displayNameForUri(uri: Uri): String {
+        var name: String? = null
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) name = cursor.getString(0)
+        }
+        return name ?: (uri.lastPathSegment ?: "track")
+    }
+
+    private fun copyUriToCache(uri: Uri, prefix: String): File {
+        val displayName = displayNameForUri(uri)
+        val extension = displayName.substringAfterLast('.', "bin").lowercase(java.util.Locale.ROOT)
+            .filter { it.isLetterOrDigit() }.take(8).ifBlank { "bin" }
+        val destination = File(cacheDir, "${prefix}_${System.currentTimeMillis()}.$extension")
+        contentResolver.openInputStream(uri)?.use { input -> destination.outputStream().use { output -> input.copyTo(output) } }
+            ?: throw IllegalStateException("خواندن فایل انتخاب‌شده ممکن نشد")
+        if (destination.length() == 0L) {
+            destination.delete()
+            throw IllegalStateException("فایل انتخاب‌شده خالی است")
+        }
+        return destination
+    }
+
+    private fun exportWithExternalTracks() {
+        val sourceUri = selectedUri
+        val audioUri = externalAudioUri
+        val subtitleUri = externalSubtitleUri
+        if (sourceUri == null) {
+            Toast.makeText(this, "ابتدا ویدیوی اصلی را انتخاب کنید", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (audioUri == null && subtitleUri == null) {
+            Toast.makeText(this, "ابتدا با دکمه‌های «افزودن صدا» یا «افزودن زیرنویس» یک فایل انتخاب کنید", Toast.LENGTH_LONG).show()
+            return
+        }
+        val button = findViewById<Button>(R.id.muxTracksButton)
+        button.isEnabled = false
+        findViewById<Button>(R.id.addAudioButton).isEnabled = false
+        findViewById<Button>(R.id.addSubtitleButton).isEnabled = false
+        statusText.text = "در حال افزودن ترک‌های صوتی/زیرنویس بدون رمزگذاری مجدد ویدیو…"
+        worker.execute {
+            var sourceFile: File? = null
+            var audioFile: File? = null
+            var subtitleFile: File? = null
+            var output: File? = null
+            var error: String? = null
+            try {
+                val videoInputFile = copyUriToCache(sourceUri, "evc_track_video")
+                sourceFile = videoInputFile
+                val selectedAudioFile = if (audioUri != null) copyUriToCache(audioUri, "evc_track_audio") else null
+                audioFile = selectedAudioFile
+                val selectedSubtitleFile = if (subtitleUri != null) copyUriToCache(subtitleUri, "evc_track_subtitle") else null
+                subtitleFile = selectedSubtitleFile
+                val outputFile = File(cacheDir, "evc_tracks_${System.currentTimeMillis()}.${outputExtension()}")
+                output = outputFile
+                val args = mutableListOf("-y", "-i", videoInputFile.absolutePath)
+                var audioInputIndex: Int? = null
+                var subtitleInputIndex: Int? = null
+                if (selectedAudioFile != null) {
+                    audioInputIndex = 1
+                    args.addAll(listOf("-i", selectedAudioFile.absolutePath))
+                }
+                if (selectedSubtitleFile != null) {
+                    subtitleInputIndex = if (selectedAudioFile != null) 2 else 1
+                    args.addAll(listOf("-i", selectedSubtitleFile.absolutePath))
+                }
+                args.addAll(listOf("-map", "0:v:0", "-map", "0:a?"))
+                if (audioInputIndex != null) args.addAll(listOf("-map", "$audioInputIndex:a:0"))
+                if (subtitleInputIndex != null) args.addAll(listOf("-map", "$subtitleInputIndex:s:0"))
+                args.addAll(listOf("-c:v", "copy", "-c:a", "copy"))
+                if (subtitleInputIndex != null) {
+                    if (outputContainerMatroska) args.addAll(listOf("-c:s", "copy"))
+                    else args.addAll(listOf("-c:s", "mov_text"))
+                }
+                args.addAll(listOf("-max_muxing_queue_size", "2048", "-f", if (outputContainerMatroska) "matroska" else "mp4", outputFile.absolutePath))
+                val session = FFmpegKit.executeWithArguments(args.toTypedArray())
+                if (!ReturnCode.isSuccess(session.returnCode) || !outputFile.exists() || outputFile.length() == 0L) {
+                    throw IllegalStateException("ساخت خروجی ناموفق بود: ${session.allLogsAsString.takeLast(1200)}")
+                }
+            } catch (e: Exception) {
+                error = e.message ?: e.javaClass.simpleName
+                output?.delete()
+                output = null
+            } finally {
+                sourceFile?.delete()
+                audioFile?.delete()
+                subtitleFile?.delete()
+            }
+            mainHandler.post {
+                button.isEnabled = true
+                findViewById<Button>(R.id.addAudioButton).isEnabled = true
+                findViewById<Button>(R.id.addSubtitleButton).isEnabled = true
+                val result = output
+                if (result == null || !result.exists() || result.length() == 0L) {
+                    statusText.text = "افزودن صدا/زیرنویس ناموفق بود: ${error ?: "خطای ناشناخته"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                    result?.delete()
+                    return@post
+                }
+                try {
+                    val ext = outputExtension()
+                    val values = ContentValues().apply {
+                        put(MediaStore.Video.Media.DISPLAY_NAME, "EVC_tracks_${System.currentTimeMillis()}.$ext")
+                        put(MediaStore.Video.Media.MIME_TYPE, outputMimeType())
+                        if (android.os.Build.VERSION.SDK_INT >= 29) {
+                            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EVC")
+                            put(MediaStore.Video.Media.IS_PENDING, 1)
+                        }
+                    }
+                    val outUri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IllegalStateException("ساخت فایل در Movies/EVC ممکن نشد")
+                    contentResolver.openOutputStream(outUri)?.use { stream -> FileInputStream(result).use { it.copyTo(stream) } }
+                        ?: throw IllegalStateException("نوشتن فایل خروجی ناموفق بود")
+                    if (android.os.Build.VERSION.SDK_INT >= 29) {
+                        contentResolver.update(outUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+                    }
+                    result.delete()
+                    statusText.text = "خروجی همراه ترک‌های انتخابی در Movies/EVC ذخیره شد؛ ویدیو بدون رمزگذاری مجدد کپی شد"
+                    Toast.makeText(this, "خروجی در پوشهٔ Movies/EVC ذخیره شد", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    result.delete()
+                    statusText.text = "ذخیرهٔ خروجی ناموفق بود: ${e.message ?: "خطا"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun chooseOverlayVideo() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "video/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        try { startActivityForResult(intent, PICK_OVERLAY_VIDEO) }
+        catch (_: Exception) { Toast.makeText(this, "انتخاب‌گر ویدیو در دسترس نیست", Toast.LENGTH_LONG).show() }
+    }
+
+    /** Burns text and/or composites a second video over the selected source. */
+    private fun exportTextAndVideoOverlay() {
+        val sourceUri = selectedUri
+        if (sourceUri == null) {
+            Toast.makeText(this, "ابتدا ویدیوی اصلی را انتخاب کنید", Toast.LENGTH_LONG).show()
+            return
+        }
+        val text = findViewById<EditText>(R.id.overlayTextInput).text.toString().trim()
+        val secondUri = overlayVideoUri
+        if (text.isEmpty() && secondUri == null) {
+            Toast.makeText(this, "متن وارد کنید یا یک ویدیوی رویی انتخاب کنید", Toast.LENGTH_LONG).show()
+            return
+        }
+        fun number(id: Int, fallback: Int, min: Int = 0, max: Int = 100): Int =
+            findViewById<EditText>(id).text.toString().toIntOrNull()?.coerceIn(min, max) ?: fallback
+        val textSize = number(R.id.overlayTextSizeInput, 36, 8, 160)
+        val textX = number(R.id.overlayTextXInput, 5)
+        val textY = number(R.id.overlayTextYInput, 5)
+        val videoX = number(R.id.overlayVideoXInput, 70)
+        val videoY = number(R.id.overlayVideoYInput, 5)
+        val videoWidth = number(R.id.overlayVideoWidthInput, 25, 5, 90)
+        if (videoX + videoWidth > 100 || videoY >= 100) {
+            Toast.makeText(this, "جایگاه یا عرض ویدیوی رویی نامعتبر است", Toast.LENGTH_LONG).show()
+            return
+        }
+        val button = findViewById<Button>(R.id.exportOverlayButton)
+        button.isEnabled = false
+        statusText.text = "در حال ترکیب متن و ویدیوی رویی…"
+        worker.execute {
+            var baseFile: File? = null
+            var overlayFile: File? = null
+            var textFile: File? = null
+            var output: File? = null
+            var error: String? = null
+            try {
+                baseFile = copyUriToCache(sourceUri, "evc_overlay_base")
+                if (secondUri != null) overlayFile = copyUriToCache(secondUri, "evc_overlay_video")
+                if (text.isNotEmpty()) {
+                    textFile = File(cacheDir, "evc_overlay_text_${System.currentTimeMillis()}.txt")
+                    textFile.writeText(text, Charsets.UTF_8)
+                }
+                val ext = outputExtension()
+                output = File(cacheDir, "evc_overlay_${System.currentTimeMillis()}.$ext")
+                val graph = mutableListOf<String>()
+                var current = "0:v"
+                if (overlayFile != null) {
+                    graph.add("[1:v][0:v]scale2ref=w=main_w*$videoWidth/100:h=ow/mdar[evc_small][evc_base]")
+                    graph.add("[evc_base][evc_small]overlay=x='main_w*$videoX/100':y='main_h*$videoY/100':eof_action=pass[evc_with_video]")
+                    current = "evc_with_video"
+                }
+                if (textFile != null) {
+                    val safePath = textFile.absolutePath.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+                    val draw = "drawtext=fontfile='/system/fonts/Roboto-Regular.ttf':textfile='$safePath':fontsize=$textSize:fontcolor=white:borderw=2:bordercolor=black:x='w*$textX/100':y='h*$textY/100'"
+                    graph.add("[$current]$draw[evc_text_out]")
+                    current = "evc_text_out"
+                }
+                val args = mutableListOf("-y", "-i", baseFile.absolutePath)
+                if (overlayFile != null) {
+                    args.addAll(listOf("-stream_loop", "-1", "-i", overlayFile.absolutePath))
+                }
+                args.addAll(listOf("-filter_complex", graph.joinToString(";"), "-map", "[$current]", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "copy"))
+                if (!outputContainerMatroska) args.addAll(listOf("-movflags", "+faststart"))
+                args.addAll(listOf("-max_muxing_queue_size", "2048", "-f", if (outputContainerMatroska) "matroska" else "mp4", output.absolutePath))
+                val session = FFmpegKit.executeWithArguments(args.toTypedArray())
+                if (!ReturnCode.isSuccess(session.returnCode) || !output.exists() || output.length() == 0L) {
+                    throw IllegalStateException("ساخت خروجی متن/ویدیو ناموفق بود: ${session.allLogsAsString.takeLast(1400)}")
+                }
+            } catch (e: Exception) {
+                error = e.message ?: e.javaClass.simpleName
+                output?.delete(); output = null
+            } finally {
+                baseFile?.delete(); overlayFile?.delete(); textFile?.delete()
+            }
+            mainHandler.post {
+                button.isEnabled = true
+                val result = output
+                if (result == null || !result.exists() || result.length() == 0L) {
+                    statusText.text = "ساخت خروجی متن/ویدیو ناموفق بود: ${error ?: "خطای ناشناخته"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                    result?.delete()
+                    return@post
+                }
+                try {
+                    val ext = outputExtension()
+                    val values = ContentValues().apply {
+                        put(MediaStore.Video.Media.DISPLAY_NAME, "EVC_overlay_${System.currentTimeMillis()}.$ext")
+                        put(MediaStore.Video.Media.MIME_TYPE, outputMimeType())
+                        if (android.os.Build.VERSION.SDK_INT >= 29) {
+                            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EVC")
+                            put(MediaStore.Video.Media.IS_PENDING, 1)
+                        }
+                    }
+                    val outUri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IllegalStateException("ساخت فایل در Movies/EVC ممکن نشد")
+                    contentResolver.openOutputStream(outUri)?.use { stream -> FileInputStream(result).use { it.copyTo(stream) } }
+                        ?: throw IllegalStateException("نوشتن فایل خروجی ناموفق بود")
+                    if (android.os.Build.VERSION.SDK_INT >= 29) {
+                        contentResolver.update(outUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+                    }
+                    result.delete()
+                    statusText.text = "متن و ویدیوی رویی ترکیب و در Movies/EVC ذخیره شدند؛ ویدیو دوباره رمزگذاری شده است."
+                    Toast.makeText(this, "خروجی در Movies/EVC ذخیره شد", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    result.delete()
+                    statusText.text = "ذخیرهٔ خروجی ناموفق بود: ${e.message ?: "خطا"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    /** Applies selected FFmpeg video filters to the full video, with optional rectangular blur. */
+    private fun exportVideoEffects() {
+        val sourceUri = selectedUri
+        if (sourceUri == null) {
+            Toast.makeText(this, "ابتدا یک ویدیو انتخاب کنید", Toast.LENGTH_LONG).show()
+            return
+        }
+        val blur = findViewById<CheckBox>(R.id.blurRegionCheck).isChecked
+        val noise = findViewById<CheckBox>(R.id.addNoiseCheck).isChecked
+        val sharpen = findViewById<CheckBox>(R.id.sharpenCheck).isChecked
+        if (!blur && !noise && !sharpen) {
+            Toast.makeText(this, "حداقل یک افکت را انتخاب کنید", Toast.LENGTH_LONG).show()
+            return
+        }
+        fun percent(id: Int, fallback: Int): Int = findViewById<EditText>(id).text.toString().toIntOrNull()?.coerceIn(0, 100) ?: fallback
+        val x = percent(R.id.blurXInput, 10)
+        val y = percent(R.id.blurYInput, 10)
+        val w = percent(R.id.blurWInput, 25)
+        val h = percent(R.id.blurHInput, 25)
+        if (blur && (w < 1 || h < 1 || x + w > 100 || y + h > 100)) {
+            Toast.makeText(this, "کادر بلوری نامعتبر است؛ X+W و Y+H نباید از ۱۰۰ بیشتر شوند", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val button = findViewById<Button>(R.id.exportVideoEffectsButton)
+        button.isEnabled = false
+        statusText.text = "در حال اعمال افکت‌های ویدیو و رمزگذاری مجدد…"
+        worker.execute {
+            var sourceFile: File? = null
+            var output: File? = null
+            var error: String? = null
+            try {
+                sourceFile = copyUriToCache(sourceUri, "evc_effect_source")
+                val ext = outputExtension()
+                output = File(cacheDir, "evc_effects_${System.currentTimeMillis()}.$ext")
+                val graph = mutableListOf<String>()
+                var currentLabel = "0:v"
+                if (blur) {
+                    graph.add("[0:v]split=2[evc_base][evc_blur_src]")
+                    graph.add("[evc_blur_src]crop=w='iw*$w/100':h='ih*$h/100':x='iw*$x/100':y='ih*$y/100',boxblur=10:2[evc_blurred]")
+                    graph.add("[evc_base][evc_blurred]overlay=x='main_w*$x/100':y='main_h*$y/100'[evc_fx0]")
+                    currentLabel = "evc_fx0"
+                }
+                val filters = mutableListOf<String>()
+                if (noise) filters.add("noise=alls=18:allf=t+u")
+                if (sharpen) filters.add("unsharp=5:5:0.8:5:5:0.0")
+                if (filters.isNotEmpty()) {
+                    val finalLabel = "evc_vout"
+                    graph.add("[$currentLabel]${filters.joinToString(",")}[$finalLabel]")
+                    currentLabel = finalLabel
+                }
+                val args = mutableListOf("-y", "-i", sourceFile.absolutePath)
+                args.addAll(listOf("-filter_complex", graph.joinToString(";"), "-map", "[$currentLabel]", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "copy"))
+                if (!outputContainerMatroska) args.addAll(listOf("-movflags", "+faststart"))
+                args.addAll(listOf("-max_muxing_queue_size", "2048", "-f", if (outputContainerMatroska) "matroska" else "mp4", output.absolutePath))
+                val session = FFmpegKit.executeWithArguments(args.toTypedArray())
+                if (!ReturnCode.isSuccess(session.returnCode) || !output.exists() || output.length() == 0L) {
+                    throw IllegalStateException("ساخت خروجی افکت ناموفق بود: ${session.allLogsAsString.takeLast(1400)}")
+                }
+            } catch (e: Exception) {
+                error = e.message ?: e.javaClass.simpleName
+                output?.delete()
+                output = null
+            } finally {
+                sourceFile?.delete()
+            }
+            mainHandler.post {
+                button.isEnabled = true
+                val result = output
+                if (result == null || !result.exists() || result.length() == 0L) {
+                    statusText.text = "ساخت خروجی افکت ناموفق بود: ${error ?: "خطای ناشناخته"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                    result?.delete()
+                    return@post
+                }
+                try {
+                    val ext = outputExtension()
+                    val values = ContentValues().apply {
+                        put(MediaStore.Video.Media.DISPLAY_NAME, "EVC_effects_${System.currentTimeMillis()}.$ext")
+                        put(MediaStore.Video.Media.MIME_TYPE, outputMimeType())
+                        if (android.os.Build.VERSION.SDK_INT >= 29) {
+                            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EVC")
+                            put(MediaStore.Video.Media.IS_PENDING, 1)
+                        }
+                    }
+                    val outUri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IllegalStateException("ساخت فایل در Movies/EVC ممکن نشد")
+                    contentResolver.openOutputStream(outUri)?.use { stream -> FileInputStream(result).use { it.copyTo(stream) } }
+                        ?: throw IllegalStateException("نوشتن فایل خروجی ناموفق بود")
+                    if (android.os.Build.VERSION.SDK_INT >= 29) {
+                        contentResolver.update(outUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+                    }
+                    result.delete()
+                    statusText.text = "افکت‌ها اعمال شدند؛ فایل در Movies/EVC ذخیره شد. ویدیو رمزگذاری مجدد شده است."
+                    Toast.makeText(this, "خروجی افکت‌ها در Movies/EVC ذخیره شد", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    result.delete()
+                    statusText.text = "ذخیرهٔ خروجی افکت ناموفق بود: ${e.message ?: "خطا"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     private fun chooseVideo() {
