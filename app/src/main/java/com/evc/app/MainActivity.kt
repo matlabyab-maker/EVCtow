@@ -1052,6 +1052,13 @@ class MainActivity : Activity() {
             Toast.makeText(this, "ابتدا با دکمه‌های «افزودن صدا» یا «افزودن زیرنویس» یک فایل انتخاب کنید", Toast.LENGTH_LONG).show()
             return
         }
+        // For the common MP4 + audio-only case, use Android's MediaExtractor/MediaMuxer
+        // instead of FFmpegKit. This preserves the original audio and adds the selected
+        // audio as a second track without re-encoding the video.
+        if (audioUri != null && subtitleUri == null && !outputContainerMatroska) {
+            exportAdditionalAudioTrackWithMediaMuxer(sourceUri, audioUri)
+            return
+        }
         val button = findViewById<Button>(R.id.muxTracksButton)
         button.isEnabled = false
         findViewById<Button>(R.id.addAudioButton).isEnabled = false
@@ -1142,6 +1149,255 @@ class MainActivity : Activity() {
                     Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
                 }
             }
+        }
+    }
+
+    /**
+     * Adds a selected audio file as an additional MP4 audio track using Android's native muxer.
+     * The source video/audio samples are copied unchanged. This route is used only when no
+     * subtitle track is requested and the selected output container is MP4.
+     */
+    private fun exportAdditionalAudioTrackWithMediaMuxer(sourceUri: Uri, audioUri: Uri) {
+        val button = findViewById<Button>(R.id.muxTracksButton)
+        button.isEnabled = false
+        findViewById<Button>(R.id.addAudioButton).isEnabled = false
+        findViewById<Button>(R.id.addSubtitleButton).isEnabled = false
+        statusText.text = "در حال افزودن ترک صوتی با موتور داخلی اندروید؛ ویدیو دوباره رمزگذاری نمی‌شود…"
+        worker.execute {
+            var sourceFile: File? = null
+            var audioFile: File? = null
+            var output: File? = null
+            var error: String? = null
+            try {
+                sourceFile = copyUriToCache(sourceUri, "evc_mux_source")
+                audioFile = copyUriToCache(audioUri, "evc_mux_audio")
+                output = File(cacheDir, "evc_tracks_${System.currentTimeMillis()}.mp4")
+                val sourceExtractor = MediaExtractor()
+                val audioExtractor = MediaExtractor()
+                var muxer: MediaMuxer? = null
+                var muxerStarted = false
+                try {
+                    sourceExtractor.setDataSource(sourceFile.absolutePath)
+                    audioExtractor.setDataSource(audioFile.absolutePath)
+                    val sourceVideoTracks = (0 until sourceExtractor.trackCount).filter {
+                        sourceExtractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true
+                    }
+                    if (sourceVideoTracks.isEmpty()) throw IllegalStateException("در فایل اصلی ترک ویدیویی پیدا نشد")
+                    val unsupported = (0 until sourceExtractor.trackCount).mapNotNull { i ->
+                        val mime = sourceExtractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME) ?: ""
+                        if (mime.startsWith("video/") || mime.startsWith("audio/")) null else "$i:$mime"
+                    }
+                    if (unsupported.isNotEmpty()) throw IllegalStateException(
+                        "فایل اصلی ترک‌های غیرصوتی/تصویری دارد (${unsupported.joinToString()})؛ برای جلوگیری از حذف آن‌ها، خروجی لغو شد."
+                    )
+                    val selectedAudioTrack = (0 until audioExtractor.trackCount).firstOrNull {
+                        audioExtractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
+                    } ?: throw IllegalStateException("در فایل انتخابی ترک صوتی پیدا نشد")
+
+                    muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                    val trackMap = mutableMapOf<Pair<Int, Int>, Int>()
+                    for (i in 0 until sourceExtractor.trackCount) {
+                        val mime = sourceExtractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME) ?: continue
+                        if (mime.startsWith("video/") || mime.startsWith("audio/")) {
+                            try {
+                                trackMap[0 to i] = muxer.addTrack(sourceExtractor.getTrackFormat(i))
+                                sourceExtractor.selectTrack(i)
+                            } catch (e: Exception) {
+                                throw IllegalStateException("حفظ ترک اصلی $i با کدک $mime توسط MP4 اندروید پشتیبانی نشد؛ خروجی لغو شد.", e)
+                            }
+                        }
+                    }
+                    try {
+                        trackMap[1 to selectedAudioTrack] = muxer.addTrack(audioExtractor.getTrackFormat(selectedAudioTrack))
+                    } catch (e: Exception) {
+                        throw IllegalStateException("فرمت صدای انتخابی با ظرف MP4 سازگار نیست؛ یک فایل صوتی AAC را امتحان کنید.", e)
+                    }
+                    audioExtractor.selectTrack(selectedAudioTrack)
+                    muxer.start()
+                    muxerStarted = true
+
+                    val durationUs = (videoDurationMs.takeIf { it > 0L } ?: run {
+                        val retriever = MediaMetadataRetriever()
+                        try {
+                            retriever.setDataSource(sourceFile.absolutePath)
+                            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: Long.MAX_VALUE / 1000L
+                        } finally { retriever.release() }
+                    }) * 1000L
+                    val extractors = listOf(sourceExtractor, audioExtractor)
+                    val exhausted = BooleanArray(extractors.size)
+                    val buffer = java.nio.ByteBuffer.allocate(8 * 1024 * 1024)
+                    val info = MediaCodec.BufferInfo()
+                    while (true) {
+                        var chosenExtractor = -1
+                        var chosenTrack = -1
+                        var chosenTime = Long.MAX_VALUE
+                        for (ei in extractors.indices) {
+                            if (exhausted[ei]) continue
+                            val ex = extractors[ei]
+                            val ti = ex.sampleTrackIndex
+                            val time = ex.sampleTime
+                            if (ti >= 0 && time >= 0L && time < chosenTime) {
+                                chosenExtractor = ei
+                                chosenTrack = ti
+                                chosenTime = time
+                            }
+                        }
+                        if (chosenExtractor < 0) break
+                        val ex = extractors[chosenExtractor]
+                        if (chosenTime <= durationUs) {
+                            buffer.clear()
+                            val size = ex.readSampleData(buffer, 0)
+                            if (size > buffer.capacity()) throw IllegalStateException("نمونهٔ صوتی/تصویری از ظرفیت بافر بیشتر است")
+                            if (size > 0) {
+                                val outputTrack = trackMap[chosenExtractor to chosenTrack]
+                                    ?: throw IllegalStateException("نگاشت ترک خروجی پیدا نشد")
+                                info.set(0, size, chosenTime, ex.sampleFlags)
+                                muxer.writeSampleData(outputTrack, buffer, info)
+                            }
+                        }
+                        if (!ex.advance()) exhausted[chosenExtractor] = true
+                    }
+                } finally {
+                    if (muxerStarted) try { muxer?.stop() } catch (_: Exception) { }
+                    try { muxer?.release() } catch (_: Exception) { }
+                    sourceExtractor.release()
+                    audioExtractor.release()
+                }
+                if (!output.exists() || output.length() == 0L) throw IllegalStateException("فایل خروجی ساخته نشد")
+            } catch (e: Exception) {
+                error = e.message ?: e.javaClass.simpleName
+                output?.delete()
+                output = null
+            } finally {
+                sourceFile?.delete()
+                audioFile?.delete()
+            }
+            mainHandler.post {
+                button.isEnabled = true
+                findViewById<Button>(R.id.addAudioButton).isEnabled = true
+                findViewById<Button>(R.id.addSubtitleButton).isEnabled = true
+                val result = output
+                if (result == null || !result.exists() || result.length() == 0L) {
+                    statusText.text = "افزودن ترک صوتی ناموفق بود: ${error ?: "خطای ناشناخته"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                    result?.delete()
+                    return@post
+                }
+                try {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Video.Media.DISPLAY_NAME, "EVC_tracks_${System.currentTimeMillis()}.mp4")
+                        put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                        if (android.os.Build.VERSION.SDK_INT >= 29) {
+                            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EVC")
+                            put(MediaStore.Video.Media.IS_PENDING, 1)
+                        }
+                    }
+                    val outUri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IllegalStateException("ساخت فایل در Movies/EVC ممکن نشد")
+                    contentResolver.openOutputStream(outUri)?.use { stream -> FileInputStream(result).use { it.copyTo(stream) } }
+                        ?: throw IllegalStateException("نوشتن فایل خروجی ناموفق بود")
+                    if (android.os.Build.VERSION.SDK_INT >= 29) {
+                        contentResolver.update(outUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+                    }
+                    result.delete()
+                    statusText.text = "ترک صوتی جدید به‌صورت جداگانه افزوده شد؛ صدای اصلی و ویدیو حفظ شدند و ویدیو دوباره رمزگذاری نشد."
+                    Toast.makeText(this, "خروجی در Movies/EVC ذخیره شد", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    result.delete()
+                    statusText.text = "ذخیرهٔ خروجی ناموفق بود: ${e.message ?: "خطا"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    /** Replaces the source soundtrack with the selected audio through Media3 Transformer. */
+    @androidx.media3.common.util.UnstableApi
+    private fun exportAudioReplacementWithTransformer(
+        sourceUri: Uri, audioUri: Uri, text: String, textSize: Int, textX: Int, textY: Int
+    ) {
+        val button = findViewById<Button>(R.id.exportOverlayButton)
+        button.isEnabled = false
+        statusText.text = "در حال ساخت خروجی صدا با موتور داخلی اندروید…"
+        val output = File(cacheDir, "evc_audio_${System.currentTimeMillis()}.mp4")
+        try {
+            val videoEffects = mutableListOf<androidx.media3.common.Effect>()
+            if (text.isNotEmpty()) {
+                val styledText = SpannableString(text).apply {
+                    setSpan(ForegroundColorSpan(Color.WHITE), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(StyleSpan(Typeface.BOLD), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+                val anchorX = (-1f + 2f * textX.coerceIn(0, 100) / 100f).coerceIn(-1f, 1f)
+                val anchorY = (1f - 2f * textY.coerceIn(0, 100) / 100f).coerceIn(-1f, 1f)
+                val scale = (textSize / 100f).coerceIn(0.08f, 1.6f)
+                val settings = StaticOverlaySettings.Builder()
+                    .setOverlayFrameAnchor(-1f, 1f)
+                    .setBackgroundFrameAnchor(anchorX, anchorY)
+                    .setScale(scale, scale)
+                    .build()
+                videoEffects.add(OverlayEffect(listOf(TextOverlay.createStaticTextOverlay(styledText, settings))))
+            }
+            val videoItemBuilder = EditedMediaItem.Builder(MediaItem.fromUri(sourceUri)).setRemoveAudio(true)
+            if (videoEffects.isNotEmpty()) videoItemBuilder.setEffects(Effects(emptyList(), videoEffects))
+            val videoSequence = EditedMediaItemSequence.Builder(videoItemBuilder.build()).build()
+            val targetDurationMs = videoDurationMs.takeIf { it > 0L } ?: run {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(this, sourceUri)
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                } finally { retriever.release() }
+            }
+            val audioMediaItem = if (targetDurationMs > 0L) {
+                MediaItem.Builder().setUri(audioUri).setClippingConfiguration(
+                    MediaItem.ClippingConfiguration.Builder().setEndPositionMs(targetDurationMs).build()
+                ).build()
+            } else MediaItem.fromUri(audioUri)
+            val audioItem = EditedMediaItem.Builder(audioMediaItem).setRemoveVideo(true).build()
+            val audioSequence = EditedMediaItemSequence.Builder(audioItem).build()
+            val composition = Composition.Builder(listOf(videoSequence, audioSequence)).build()
+            val transformer = Transformer.Builder(this).addListener(object : Transformer.Listener {
+                override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                    activeTransformer = null
+                    try {
+                        val values = ContentValues().apply {
+                            put(MediaStore.Video.Media.DISPLAY_NAME, "EVC_audio_${System.currentTimeMillis()}.mp4")
+                            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                                put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EVC")
+                                put(MediaStore.Video.Media.IS_PENDING, 1)
+                            }
+                        }
+                        val outUri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                            ?: throw IllegalStateException("ساخت فایل در Movies/EVC ممکن نشد")
+                        contentResolver.openOutputStream(outUri)?.use { stream -> FileInputStream(output).use { it.copyTo(stream) } }
+                            ?: throw IllegalStateException("نوشتن فایل خروجی ناموفق بود")
+                        if (android.os.Build.VERSION.SDK_INT >= 29) {
+                            contentResolver.update(outUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+                        }
+                        output.delete()
+                        button.isEnabled = true
+                        statusText.text = if (text.isNotEmpty()) "متن و صدای انتخابی در Movies/EVC ذخیره شدند؛ صدای اصلی جایگزین شد." else "صدای انتخابی در Movies/EVC جایگزین صدای اصلی شد."
+                        Toast.makeText(this@MainActivity, statusText.text, Toast.LENGTH_LONG).show()
+                    } catch (e: Exception) {
+                        output.delete(); button.isEnabled = true
+                        statusText.text = "ذخیرهٔ خروجی صدا ناموفق بود: ${e.message ?: "خطا"}"
+                        Toast.makeText(this@MainActivity, statusText.text, Toast.LENGTH_LONG).show()
+                    }
+                }
+                override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
+                    activeTransformer = null
+                    output.delete(); button.isEnabled = true
+                    statusText.text = "ساخت خروجی صدا ناموفق بود: ${exportException.message ?: "خطای رمزگذاری"}"
+                    Toast.makeText(this@MainActivity, statusText.text, Toast.LENGTH_LONG).show()
+                }
+            }).build()
+            activeTransformer = transformer
+            transformer.start(composition, output.absolutePath)
+        } catch (e: Exception) {
+            activeTransformer = null
+            output.delete(); button.isEnabled = true
+            statusText.text = "شروع خروجی صدا ناموفق بود: ${e.message ?: e.javaClass.simpleName}"
+            Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -1257,11 +1513,18 @@ class MainActivity : Activity() {
             Toast.makeText(this, "جایگاه یا عرض ویدیوی رویی نامعتبر است", Toast.LENGTH_LONG).show()
             return
         }
-        // For text-only MP4 exports use Media3's native Transformer overlay path.
-        // This avoids entering the FFmpegKit JNI path that was closing the app on some ARM32 phones.
-        if (text.isNotEmpty() && secondUri == null && audioUri == null && !outputContainerMatroska) {
-            exportTextOnlyWithTransformer(sourceUri, text, textSize, textX, textY)
-            return
+        // Keep common MP4 exports on Media3 rather than the FFmpegKit JNI path.
+        // Text-only already uses this route; audio replacement now uses a parallel audio
+        // sequence, while the source video sequence has its original audio removed.
+        if (secondUri == null && !outputContainerMatroska) {
+            if (audioUri != null) {
+                exportAudioReplacementWithTransformer(sourceUri, audioUri, text, textSize, textX, textY)
+                return
+            }
+            if (text.isNotEmpty()) {
+                exportTextOnlyWithTransformer(sourceUri, text, textSize, textX, textY)
+                return
+            }
         }
         val button = findViewById<Button>(R.id.exportOverlayButton)
         button.isEnabled = false

@@ -8,7 +8,7 @@
 
 # EVCtow — Android video editor
 
-**Project version:** 0.2.94  
+**Project version:** 0.2.107  
 **Android minimum SDK:** 24 (Android 7.0)  
 **Build:** GitHub Actions / Gradle 8.9 / JDK 17
 
@@ -29,7 +29,7 @@ It is configured to run on:
 - pull requests targeting any branch;
 - manual launch through **Actions → EVCtow Android Build → Run workflow**.
 
-On success, the workflow uploads an artifact named `EVCtow-0.2.94-ARM32-TextVideoAudio-Controls-debug-apk` containing the debug APK.
+On success, the workflow uploads an artifact named `EVCtow-0.2.107-ARM32-TextVideoAudio-Controls-debug-apk` containing the debug APK.
 
 ## Uploading to a new repository
 
@@ -147,3 +147,14 @@ The video-effects panel and its controls (regional blur, noise, sharpening, and 
 - Limited FFmpeg filter and encoder threading to one thread for text/video/audio overlay export.
 - Switched to the ultrafast x264 preset and disabled encoder look-ahead to reduce memory pressure on 32-bit ARM devices.
 - Reduced the muxing queue limit. This is a targeted stability change; it does not guarantee a fix without device testing or a crash log.
+
+
+### Version 0.2.106
+- Moved Join and separate-segment export into the horizontal row of compact controls below the player, matching the 30dp height of the small controls.
+
+
+## Version 0.2.107 — Audio export stability (source-level change; build/device test pending)
+- MP4 audio replacement, with optional text but without a second video overlay, now uses Media3 Transformer instead of the FFmpegKit path. The original video audio is removed and the selected audio is used as the soundtrack.
+- MP4 additional-audio-track export, when no subtitle is selected, now uses Android MediaExtractor/MediaMuxer. It retains the source audio/video and adds the selected audio as a separate track without re-encoding the video. Unsupported source tracks or incompatible audio formats report an error rather than being silently discarded.
+- MKV output, subtitle muxing, and combinations that include a second overlay video still use the existing FFmpegKit path.
+- The project source was reviewed for routing and identifiers, but no Android build or device-level audio test has been run; GitHub Actions and device testing are required.
