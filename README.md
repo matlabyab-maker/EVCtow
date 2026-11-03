@@ -1,3 +1,20 @@
+## Version 0.2.110 — Overlay controls consolidated and video selection hardened
+
+- Moved “Place overlay video” and “Place text” into the same compact row as “Build track output”; removed their separate placement row and extra help line.
+- Kept the placement hide/close control in the same row to preserve its behavior.
+- The “Place overlay video” button opens the overlay-video picker if no overlay video has been selected yet.
+- Overlay-video selection now attempts to persist read permission, accepts the URI from either `data` or `clipData`, and verifies that the selected item can be opened before marking it selected.
+- Updated the GitHub Actions artifact name for version 0.2.110.
+- XML validity and ID uniqueness were checked. Android build/device testing has not been performed in this environment.
+
+## Version 0.2.109 — Live text editing on the player
+
+- Text appears on the player as it is typed; the separate “activate/apply text” button was removed.
+- Drag the visible text directly on the player to move it, and pinch with two fingers to resize it.
+- Removed text X/Y and manual size fields. Only text start and end times remain; the end time defaults to the selected video's duration.
+- Partial-duration text uses the timed FFmpeg drawtext path; full-duration MP4 text continues using the existing Media3 Transformer path.
+- XML validity and removed-ID references were checked. Android build/device testing has not been performed in this environment.
+
 ## Version 0.2.100 — Text-only export routed through Media3
 
 - Text-only MP4 export now uses Media3 Transformer with a text overlay instead of invoking FFmpegKit.
@@ -8,7 +25,7 @@
 
 # EVCtow — Android video editor
 
-**Project version:** 0.2.107  
+**Project version:** 0.2.110  
 **Android minimum SDK:** 24 (Android 7.0)  
 **Build:** GitHub Actions / Gradle 8.9 / JDK 17
 
@@ -29,7 +46,7 @@ It is configured to run on:
 - pull requests targeting any branch;
 - manual launch through **Actions → EVCtow Android Build → Run workflow**.
 
-On success, the workflow uploads an artifact named `EVCtow-0.2.107-ARM32-TextVideoAudio-Controls-debug-apk` containing the debug APK.
+On success, the workflow uploads an artifact named `EVCtow-0.2.110-ARM32-TextVideoAudio-Controls-debug-apk` containing the debug APK.
 
 ## Uploading to a new repository
 

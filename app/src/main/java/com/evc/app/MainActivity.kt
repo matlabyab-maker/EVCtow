@@ -43,6 +43,8 @@ import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
+import android.text.TextWatcher
+import android.text.Editable
 import android.widget.Toast
 import android.widget.VideoView
 import androidx.media3.common.MediaItem
@@ -115,6 +117,9 @@ class MainActivity : Activity() {
     private val PICK_OVERLAY_VIDEO = 7309
     private val PICK_APPEND_VIDEOS = 7310
     private var overlayVideoUri: Uri? = null
+    private var textXPercent = 5
+    private var textYPercent = 5
+    private var liveTextSize = 36
     private var externalAudioUri: Uri? = null
     private var externalSubtitleUri: Uri? = null
     private val vectorUris = mutableListOf<Uri>()
@@ -138,23 +143,33 @@ class MainActivity : Activity() {
         val playerContainer = findViewById<FrameLayout>(R.id.playerContainer)
         cropOverlay = FreeCropOverlayView()
         playerContainer.addView(cropOverlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        placementOverlay = PlacementOverlayView(this) { xPct, yPct ->
+        placementOverlay = PlacementOverlayView(this, { xPct, yPct ->
             when (placementMode) {
-                PlacementOverlayView.Mode.TEXT -> {
-                    findViewById<EditText>(R.id.overlayTextXInput).setText(xPct.toString())
-                    findViewById<EditText>(R.id.overlayTextYInput).setText(yPct.toString())
-                }
+                PlacementOverlayView.Mode.TEXT -> { textXPercent = xPct; textYPercent = yPct }
                 PlacementOverlayView.Mode.VIDEO -> {
                     findViewById<EditText>(R.id.overlayVideoXInput).setText(xPct.toString())
                     findViewById<EditText>(R.id.overlayVideoYInput).setText(yPct.toString())
                 }
                 else -> Unit
             }
-        }
+        }, { newSize ->
+            liveTextSize = newSize.coerceIn(8, 160)
+            placementOverlay.setTextPreview(findViewById<EditText>(R.id.overlayTextInput).text.toString(), liveTextSize)
+        })
         placementOverlay.visibility = View.GONE
         playerContainer.addView(placementOverlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        findViewById<Button>(R.id.placeTextOnPlayerButton).setOnClickListener { activatePlacementMode(PlacementOverlayView.Mode.TEXT) }
-        findViewById<Button>(R.id.placeVideoOnPlayerButton).setOnClickListener { activatePlacementMode(PlacementOverlayView.Mode.VIDEO) }
+        findViewById<Button>(R.id.placeVideoOnPlayerButton).setOnClickListener {
+            if (overlayVideoUri == null) {
+                Toast.makeText(this, "ابتدا در بخش متن/ویدیوی رویی، «انتخاب ویدیوی رویی» را بزنید", Toast.LENGTH_LONG).show()
+                findViewById<Button>(R.id.pickOverlayVideoButton).performClick()
+            } else activatePlacementMode(PlacementOverlayView.Mode.VIDEO)
+        }
+        findViewById<Button>(R.id.placeTextOnPlayerButton).setOnClickListener {
+            if (findViewById<EditText>(R.id.overlayTextInput).text.isNullOrBlank()) {
+                findViewById<EditText>(R.id.overlayTextInput).requestFocus()
+                Toast.makeText(this, "ابتدا متن را بنویسید؛ سپس جای آن را روی پلیر تنظیم کنید", Toast.LENGTH_LONG).show()
+            } else activatePlacementMode(PlacementOverlayView.Mode.TEXT)
+        }
         findViewById<Button>(R.id.hidePlacementOverlayButton).setOnClickListener { placementMode = PlacementOverlayView.Mode.NONE; placementOverlay.visibility = View.GONE }
         freeCropControls = findViewById(R.id.freeCropControls)
         findViewById<Button>(R.id.cropButton).setOnClickListener { toggleFreeCropMode() }
@@ -241,22 +256,11 @@ class MainActivity : Activity() {
         }
         findViewById<Button>(R.id.addSubtitleButton).setOnClickListener { chooseExternalSubtitle() }
         findViewById<Button>(R.id.muxTracksButton).setOnClickListener { exportWithExternalTracks() }
-        findViewById<Button>(R.id.addTextButton).setOnClickListener {
-            val enteredText = findViewById<EditText>(R.id.overlayTextInput).text.toString().trim()
-            if (selectedUri == null) {
-                Toast.makeText(this, "ابتدا با «انتخاب ویدیو» ویدیوی اصلی را انتخاب کنید", Toast.LENGTH_LONG).show()
-                statusText.text = "متن هنوز فعال نشده: ابتدا ویدیوی اصلی را انتخاب کنید"
-            } else if (enteredText.isEmpty()) {
-                findViewById<EditText>(R.id.overlayTextInput).requestFocus()
-                Toast.makeText(this, "ابتدا متن دلخواه را در کادر وارد کنید", Toast.LENGTH_LONG).show()
-                statusText.text = "متن هنوز فعال نشده: متن دلخواه را وارد کنید"
-            } else {
-                activatePlacementMode(PlacementOverlayView.Mode.TEXT)
-                findViewById<Button>(R.id.addTextButton).text = "متن فعال شد ✓ • جایگاه را روی پلیر بکشید"
-                statusText.text = "متن فعال شد؛ کادر بنفش را روی پلیر بکشید تا محل متن ثبت شود. برای تولید فایل، دکمهٔ «ساخت خروجی متن/فیلم/صدا» را بزنید."
-                Toast.makeText(this, "متن فعال شد؛ محل آن را روی پلیر تعیین کنید", Toast.LENGTH_LONG).show()
-            }
-        }
+        findViewById<EditText>(R.id.overlayTextInput).addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updateLiveTextPreview() }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
         findViewById<Button>(R.id.pickOverlayVideoButton).setOnClickListener {
             statusText.text = "در حال باز کردن انتخاب‌گر ویدیوی رویی…"
             chooseOverlayVideo()
@@ -539,9 +543,22 @@ class MainActivity : Activity() {
             findViewById<Button>(R.id.addSubtitleButton).text = "زیرنویس ✓"
             statusText.text = "زیرنویس انتخاب شد؛ برای افزودن آن به ویدیو، «ساخت خروجی» را بزنید"
         } else if (requestCode == PICK_OVERLAY_VIDEO) {
-            overlayVideoUri = data.data ?: return
+            val uri = data.data ?: data.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri ?: return
+            try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) { }
+            // Verify that the provider actually lets us read the selected video before accepting it.
+            try {
+                contentResolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
+                    if (descriptor.length == 0L) throw IllegalStateException("فایل ویدیوی انتخابی خالی است")
+                } ?: throw IllegalStateException("فایل انتخاب‌شده قابل خواندن نیست")
+            } catch (e: Exception) {
+                overlayVideoUri = null
+                Toast.makeText(this, "ویدیوی رویی باز نشد: ${e.message ?: "دسترسی به فایل ناموفق بود"}", Toast.LENGTH_LONG).show()
+                statusText.text = "انتخاب ویدیوی رویی ناموفق بود؛ فایل دیگری انتخاب کنید"
+                return
+            }
+            overlayVideoUri = uri
             findViewById<Button>(R.id.pickOverlayVideoButton).text = "ویدیوی رویی ✓"
-            statusText.text = "ویدیوی دوم انتخاب شد؛ موقعیت و عرض را تنظیم کنید و خروجی بگیرید"
+            statusText.text = "ویدیوی رویی بارگذاری شد؛ «جای ویدیوی رویی» را بزنید و روی پلیر محل آن را تنظیم کنید"
         } else if (requestCode == PICK_REFERENCE_IMAGE) {
             referenceImageUri = data.data ?: return
             if (selectedUri == null || videoDurationMs <= 0L) {
@@ -1052,10 +1069,12 @@ class MainActivity : Activity() {
             Toast.makeText(this, "ابتدا با دکمه‌های «افزودن صدا» یا «افزودن زیرنویس» یک فایل انتخاب کنید", Toast.LENGTH_LONG).show()
             return
         }
-        // For the common MP4 + audio-only case, use Android's MediaExtractor/MediaMuxer
-        // instead of FFmpegKit. This preserves the original audio and adds the selected
-        // audio as a second track without re-encoding the video.
-        if (audioUri != null && subtitleUri == null && !outputContainerMatroska) {
+        // Android supports reliable multi-track MP4 muxing through MediaMuxer starting
+        // with API 26. On API 24-25, avoid invoking the native multi-track muxer because
+        // adding a second audio track is not consistently supported; keep the established
+        // FFmpeg path for those devices instead.
+        if (audioUri != null && subtitleUri == null && !outputContainerMatroska &&
+            android.os.Build.VERSION.SDK_INT >= 26) {
             exportAdditionalAudioTrackWithMediaMuxer(sourceUri, audioUri)
             return
         }
@@ -1179,6 +1198,31 @@ class MainActivity : Activity() {
                 try {
                     sourceExtractor.setDataSource(sourceFile.absolutePath)
                     audioExtractor.setDataSource(audioFile.absolutePath)
+                    // Reject unsupported container codecs before passing their formats to
+                    // MediaMuxer. Some Android/vendor muxer implementations terminate the
+                    // process in native code for unsupported MP4 track formats.
+                    val sourceFormats = (0 until sourceExtractor.trackCount).map { sourceExtractor.getTrackFormat(it) }
+                    val allowedVideoMimes = setOf("video/avc", "video/hevc", "video/mp4v-es")
+                    val allowedAudioMimes = setOf("audio/mp4a-latm")
+                    val unsupportedMp4Formats = sourceFormats.mapNotNull { format ->
+                        val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                        when {
+                            mime.startsWith("video/") && mime !in allowedVideoMimes -> mime
+                            mime.startsWith("audio/") && mime !in allowedAudioMimes -> mime
+                            !mime.startsWith("video/") && !mime.startsWith("audio/") -> mime
+                            else -> null
+                        }
+                    }.distinct()
+                    if (unsupportedMp4Formats.isNotEmpty()) throw IllegalStateException(
+                        "برای جلوگیری از بسته‌شدن برنامه، این ترک‌های ناسازگار با مسیر امن MP4 وارد خروجی نشدند: ${unsupportedMp4Formats.joinToString()}. از ویدیوی H.264/H.265 با صدای AAC استفاده کنید."
+                    )
+                    val selectedAudioMimes = (0 until audioExtractor.trackCount).mapNotNull { i ->
+                        audioExtractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME)
+                            ?.takeIf { it.startsWith("audio/") }
+                    }
+                    if (selectedAudioMimes.none { it == "audio/mp4a-latm" }) throw IllegalStateException(
+                        "فایل صدای انتخابی برای افزودن مستقیم به MP4 باید AAC باشد. ابتدا آن را به AAC تبدیل کنید؛ برنامه برای جلوگیری از قطع‌شدن، این مسیر ناسازگار را اجرا نکرد."
+                    )
                     val sourceVideoTracks = (0 until sourceExtractor.trackCount).filter {
                         sourceExtractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true
                     }
@@ -1503,9 +1547,23 @@ class MainActivity : Activity() {
         }
         fun number(id: Int, fallback: Int, min: Int = 0, max: Int = 100): Int =
             findViewById<EditText>(id).text.toString().toIntOrNull()?.coerceIn(min, max) ?: fallback
-        val textSize = number(R.id.overlayTextSizeInput, 36, 8, 160)
-        val textX = number(R.id.overlayTextXInput, 5)
-        val textY = number(R.id.overlayTextYInput, 5)
+        val textSize = liveTextSize.coerceIn(8, 160)
+        val textX = textXPercent.coerceIn(0, 100)
+        val textY = textYPercent.coerceIn(0, 100)
+        val textStartMs = parseTimeInput(findViewById<EditText>(R.id.overlayTextStartTime).text.toString())
+        val textEndMs = parseTimeInput(findViewById<EditText>(R.id.overlayTextEndTime).text.toString())
+        if (text.isNotEmpty()) {
+            if (textStartMs == null || textEndMs == null || textEndMs <= textStartMs) {
+                Toast.makeText(this, "زمان شروع و پایان متن را درست وارد کنید؛ پایان باید بعد از شروع باشد", Toast.LENGTH_LONG).show()
+                return
+            }
+            if (videoDurationMs > 0L && textEndMs > videoDurationMs) {
+                Toast.makeText(this, "زمان پایان متن از مدت ویدیو بیشتر است", Toast.LENGTH_LONG).show()
+                return
+            }
+        }
+        val fullDurationText = text.isNotEmpty() && textStartMs == 0L &&
+            (videoDurationMs <= 0L || (textEndMs ?: 0L) >= videoDurationMs)
         val videoX = number(R.id.overlayVideoXInput, 70)
         val videoY = number(R.id.overlayVideoYInput, 5)
         val videoWidth = number(R.id.overlayVideoWidthInput, 25, 5, 90)
@@ -1516,7 +1574,7 @@ class MainActivity : Activity() {
         // Keep common MP4 exports on Media3 rather than the FFmpegKit JNI path.
         // Text-only already uses this route; audio replacement now uses a parallel audio
         // sequence, while the source video sequence has its original audio removed.
-        if (secondUri == null && !outputContainerMatroska) {
+        if (secondUri == null && !outputContainerMatroska && (text.isEmpty() || fullDurationText)) {
             if (audioUri != null) {
                 exportAudioReplacementWithTransformer(sourceUri, audioUri, text, textSize, textX, textY)
                 return
@@ -1555,7 +1613,10 @@ class MainActivity : Activity() {
                 }
                 if (textFile != null) {
                     val safePath = textFile.absolutePath.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-                    val draw = "drawtext=fontfile='/system/fonts/Roboto-Regular.ttf':textfile='$safePath':fontsize=$textSize:fontcolor=white:borderw=2:bordercolor=black:x='w*$textX/100':y='h*$textY/100'"
+                    val startSeconds = ((textStartMs ?: 0L).toDouble() / 1000.0).let { String.format(java.util.Locale.US, "%.3f", it) }
+                    val endSeconds = ((textEndMs ?: videoDurationMs).toDouble() / 1000.0).let { String.format(java.util.Locale.US, "%.3f", it) }
+                    val timingFilter = if (text.isNotEmpty()) ":enable='between(t\\,$startSeconds\\,$endSeconds)'" else ""
+                    val draw = "drawtext=fontfile='/system/fonts/Roboto-Regular.ttf':textfile='$safePath':fontsize=$textSize:fontcolor=white:borderw=2:bordercolor=black:x='w*$textX/100':y='h*$textY/100'$timingFilter"
                     graph.add("[$current]$draw[evc_text_out]")
                     current = "evc_text_out"
                 }
@@ -1657,6 +1718,20 @@ class MainActivity : Activity() {
 
     /** Applies selected FFmpeg video filters to the full video, with optional rectangular blur. */
 
+    private fun updateLiveTextPreview() {
+        val text = findViewById<EditText>(R.id.overlayTextInput).text.toString()
+        if (text.isNotBlank() && selectedUri != null) {
+            placementMode = PlacementOverlayView.Mode.TEXT
+            placementOverlay.setMode(PlacementOverlayView.Mode.TEXT)
+            placementOverlay.setSelection(textXPercent, textYPercent, 40, 20)
+            placementOverlay.setTextPreview(text, liveTextSize)
+            placementOverlay.visibility = View.VISIBLE
+            placementOverlay.bringToFront()
+        } else if (placementMode == PlacementOverlayView.Mode.TEXT) {
+            placementOverlay.visibility = View.GONE
+        }
+    }
+
     private fun activatePlacementMode(mode: PlacementOverlayView.Mode) {
         placementMode = mode
         val readPercent: (Int, Int) -> Int = { id, fallback -> findViewById<EditText>(id).text.toString().toIntOrNull()?.coerceIn(0, 100) ?: fallback }
@@ -1665,7 +1740,7 @@ class MainActivity : Activity() {
         val w: Int
         val h: Int
         when (mode) {
-            PlacementOverlayView.Mode.TEXT -> { x = readPercent(R.id.overlayTextXInput, 5); y = readPercent(R.id.overlayTextYInput, 5); w = 40; h = 20 }
+            PlacementOverlayView.Mode.TEXT -> { x = textXPercent; y = textYPercent; w = 40; h = 20 }
             PlacementOverlayView.Mode.VIDEO -> { x = readPercent(R.id.overlayVideoXInput, 70); y = readPercent(R.id.overlayVideoYInput, 5); w = readPercent(R.id.overlayVideoWidthInput, 25).coerceIn(5, 90); h = (w * 9 / 16).coerceAtLeast(8) }
             else -> { placementOverlay.visibility = View.GONE; return }
         }
@@ -1673,8 +1748,7 @@ class MainActivity : Activity() {
         placementOverlay.setSelection(x, y, w, h)
         if (mode == PlacementOverlayView.Mode.TEXT) {
             val enteredText = findViewById<EditText>(R.id.overlayTextInput).text.toString()
-            val enteredSize = findViewById<EditText>(R.id.overlayTextSizeInput).text.toString().toIntOrNull() ?: 36
-            placementOverlay.setTextPreview(enteredText, enteredSize)
+            placementOverlay.setTextPreview(enteredText, liveTextSize)
         }
         placementOverlay.visibility = View.VISIBLE
         placementOverlay.bringToFront()
@@ -1818,6 +1892,8 @@ class MainActivity : Activity() {
                 mainHandler.post {
                     if (generation != storyboardGeneration) return@post
                     videoDurationMs = duration
+                    findViewById<EditText>(R.id.overlayTextEndTime).setText(formatTime(duration))
+                    updateLiveTextPreview()
                     if (storyboardEndMs <= storyboardStartMs || storyboardEndMs > duration) {
                         storyboardStartMs = 0L
                         storyboardEndMs = duration
