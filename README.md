@@ -1,3 +1,9 @@
+## Version 0.2.124 — Kotlin nullable SurfaceTexture compile fix
+
+- Fixed the Kotlin compilation error in the overlay-video preview: `TextureView.surfaceTexture` is nullable, so the preview now starts only when a non-null `SurfaceTexture` is available.
+- No overlay behavior or UI was otherwise changed.
+- Source-level fix and ZIP/XML checks performed; Android build was not run in this environment.
+
 ## Version 0.2.123 — Actual overlay-video preview in the player
 
 - Selecting a secondary video now creates a real muted, looping preview over the main player instead of showing only a labeled placeholder rectangle.

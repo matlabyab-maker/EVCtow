@@ -1575,7 +1575,7 @@ class MainActivity : Activity() {
                 } finally { retriever.release() }
             }
             updateOverlayPreviewLayout()
-            if (overlayPreviewTexture.isAvailable) startOverlayPreviewOnSurface(overlayPreviewTexture.surfaceTexture)
+            if (overlayPreviewTexture.isAvailable) overlayPreviewTexture.surfaceTexture?.let { startOverlayPreviewOnSurface(it) }
         } catch (e: Exception) {
             overlayVideoLayer.visibility = View.GONE
             statusText.text = "پیش‌نمایش ویدیوی رویی باز نشد: ${e.message ?: "قالب یا دسترسی فایل پشتیبانی نمی‌شود"}"
