@@ -74,6 +74,20 @@ import java.util.concurrent.Executors
 import java.io.File
 import java.io.FileInputStream
 import kotlin.math.max
+import kotlin.math.abs
+
+enum class TrackClipKind { AUDIO, SUBTITLE }
+
+data class TrackClip(
+    val id: Long,
+    val uri: Uri,
+    val kind: TrackClipKind,
+    val name: String,
+    val startMs: Long,
+    val sourceStartMs: Long,
+    val durationMs: Long,
+    val sourceDurationMs: Long
+)
 
 class MainActivity : Activity() {
     private lateinit var videoView: VideoView
@@ -87,9 +101,6 @@ class MainActivity : Activity() {
     private lateinit var storyboardRows: LinearLayout
     private lateinit var selectionText: TextView
     private lateinit var timeModeButton: Button
-    private lateinit var selectForDeleteModeButton: Button
-    private lateinit var selectForExportModeButton: Button
-    private var selectingForExport = false
     private lateinit var timelineView: TimelineView
     private val timelineSplitPoints = sortedSetOf<Long>()
     private val deletedTimelineRanges = mutableListOf<Pair<Long, Long>>()
@@ -103,6 +114,8 @@ class MainActivity : Activity() {
     private var storyboardRangeAnchorIndex: Int? = null
     private val frameViews = mutableMapOf<Int, FrameLayout>()
     private val frameBitmaps = mutableMapOf<Int, Bitmap>()
+    // Exact timestamps for storyboard cells populated by image-based scene search.
+    private val imageSearchFrameTimes = mutableMapOf<Int, Long>()
     private val deletedStoryboardFrames = linkedSetOf<Int>()
     private var selectedUri: Uri? = null
     private var activeTransformer: Transformer? = null
@@ -110,9 +123,13 @@ class MainActivity : Activity() {
     private var storyboardStartMs = 0L
     private var storyboardEndMs = 0L
     private var storyboardIntervalMs: Long? = null
+    // The normal storyboard uses 120 cells; extra cells exist only for a custom interval/range.
+    private var activeStoryboardFrameCount = DEFAULT_STORYBOARD_FRAME_COUNT
     private var storyboardGeneration = 0
     private data class RgbProfile(val red: Float, val green: Float, val blue: Float, val saturation: Float)
     private val frameColorProfiles = mutableMapOf<Int, RgbProfile>()
+    // Best-effort, luminance-guided colorization for black-and-white footage.
+    private var autoColorEnabled = false
     private val mergeUris = mutableListOf<Uri>()
     private val PICK_MERGE_VIDEOS = 7304
     private val PICK_REFERENCE_IMAGE = 7305
@@ -136,6 +153,10 @@ class MainActivity : Activity() {
     private var liveTextSize = 36
     private var externalAudioUri: Uri? = null
     private var externalSubtitleUri: Uri? = null
+    private val trackClips = mutableListOf<TrackClip>()
+    private var nextTrackClipId = 1L
+    private lateinit var trackTimelineView: TrackTimelineView
+    private var selectedTrackClipId: Long? = null
     private val vectorUris = mutableListOf<Uri>()
     private var referenceImageUri: Uri? = null
     // Crop margins are stored as percentages of the source frame and reused for export.
@@ -147,12 +168,32 @@ class MainActivity : Activity() {
     private lateinit var cropOverlay: FreeCropOverlayView
     private lateinit var freeCropControls: LinearLayout
     private var freeCropMode = false
+    private data class EditorHistoryState(val splitPoints: List<Long>, val deletedRanges: List<Pair<Long, Long>>, val clips: List<TrackClip>, val profiles: Map<Int, RgbProfile>, val crop: List<Int>, val cropSaved: Boolean, val autoColor: Boolean, val overlayUri: Uri?, val text: String, val textX: Int, val textY: Int, val textSize: Int, val overlayX: Int, val overlayY: Int, val overlayWidth: Int, val merge: List<Uri>, val vector: List<Uri>, val reference: Uri?)
+    private val undoHistory = java.util.ArrayDeque<EditorHistoryState>()
+    private val redoHistory = java.util.ArrayDeque<EditorHistoryState>()
+    private var restoringHistory = false
+    private val maxHistorySteps = 200
+
     // Applies to original-quality stream-copy exports (main export, timeline, storyboard segments).
     private var outputContainerMatroska = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        findViewById<Button>(R.id.outputChangesButton).setOnClickListener { exportCombinedChanges() }
+        findViewById<Button>(R.id.globalDeleteButton).setOnClickListener { recordUndoState(); deleteSelectionOrShowOptions() }
+        findViewById<Button>(R.id.undoButton).setOnClickListener { undoEditorStep() }
+        findViewById<Button>(R.id.redoButton).setOnClickListener { redoEditorStep() }
+        findViewById<Button>(R.id.autoColorButton).setOnClickListener {
+            recordUndoState()
+            autoColorEnabled = !autoColorEnabled
+            findViewById<Button>(R.id.autoColorButton).text = if (autoColorEnabled) "Auto Color: روشن" else "Auto Color"
+            statusText.post {
+                statusText.text = if (autoColorEnabled)
+                    "Auto Color روشن شد؛ رنگ‌آمیزی تقریبی بر اساس روشنایی تصویر در «خروجی تغییرات» اعمال می‌شود. تشخیص معنایی آسمان/درخت/صورت با مدل هوش مصنوعی انجام نمی‌شود."
+                else "Auto Color خاموش شد"
+            }
+        }
         videoView = findViewById(R.id.videoView)
         val playerContainer = findViewById<FrameLayout>(R.id.playerContainer)
         // A real second-video preview sits above the source video and below the crop/placement handles.
@@ -205,23 +246,15 @@ class MainActivity : Activity() {
         freeCropControls = findViewById(R.id.freeCropControls)
         findViewById<Button>(R.id.cropButton).setOnClickListener { toggleFreeCropMode() }
         findViewById<Button>(R.id.applyFreeCropButton).setOnClickListener {
+            recordUndoState()
             readCropOverlay()
             if (!validCropMargins()) return@setOnClickListener
             cropSettingsSaved = true
             freeCropMode = false
             cropOverlay.visibility = View.GONE
             freeCropControls.visibility = View.GONE
-            statusText.text = "محدودهٔ Free Crop ثبت شد: چپ $cropLeftPct٪، بالا $cropTopPct٪، راست $cropRightPct٪، پایین $cropBottomPct٪؛ برای ساخت فایل «خروجی Crop» را بزنید"
+            statusText.text = "محدودهٔ Free Crop ثبت شد: چپ $cropLeftPct٪، بالا $cropTopPct٪، راست $cropRightPct٪، پایین $cropBottomPct٪؛ برای ساخت فایل نهایی، دکمهٔ «خروجی تغییرات» را بزنید"
             Toast.makeText(this, "محدودهٔ برش آزاد ثبت شد", Toast.LENGTH_SHORT).show()
-        }
-        findViewById<Button>(R.id.exportFreeCropButton).setOnClickListener {
-            if (freeCropMode) readCropOverlay()
-            if (!validCropMargins()) return@setOnClickListener
-            cropSettingsSaved = true
-            freeCropMode = false
-            cropOverlay.visibility = View.GONE
-            freeCropControls.visibility = View.GONE
-            exportCroppedVideo()
         }
         findViewById<Button>(R.id.outputFormatButton).setOnClickListener {
             outputContainerMatroska = !outputContainerMatroska
@@ -237,9 +270,28 @@ class MainActivity : Activity() {
         storyboardRows = findViewById(R.id.storyboardRows)
         selectionText = findViewById(R.id.selectionText)
         timeModeButton = findViewById(R.id.timeModeButton)
-        selectForDeleteModeButton = findViewById(R.id.selectForDeleteModeButton)
-        selectForExportModeButton = findViewById(R.id.selectForExportModeButton)
         timelineView = findViewById(R.id.timelineView)
+        trackTimelineView = findViewById(R.id.trackTimelineView)
+        trackTimelineView.onClipSelected = { clip ->
+            selectedTrackClipId = clip?.id
+            statusText.text = clip?.let { "ترک انتخابی: ${it.name} • برای انتخاب چند ترک، هر ترک را نگه دارید؛ کشیدن وسط = جابه‌جایی، لبه‌ها = برش" }
+                ?: "ترکی انتخاب نشده است"
+        }
+        trackTimelineView.onClipsChanged = { changed ->
+            trackClips.clear(); trackClips.addAll(changed)
+            selectedTrackClipId = trackTimelineView.selectedClipId
+            syncLegacyTrackUris()
+        }
+        findViewById<Button>(R.id.splitTrackButton).setOnClickListener { splitSelectedTrackClip() }
+        findViewById<Button>(R.id.deleteTrackButton).setOnClickListener { deleteSelectedTrackClip() }
+        findViewById<Button>(R.id.resetTracksButton).setOnClickListener {
+            recordUndoState()
+            trackClips.clear(); selectedTrackClipId = null; externalAudioUri = null; externalSubtitleUri = null
+            trackTimelineView.setClips(emptyList(), videoDurationMs)
+            findViewById<Button>(R.id.addAudioButton).text = "افزودن صدا"
+            findViewById<Button>(R.id.addSubtitleButton).text = "افزودن زیرنویس"
+            statusText.text = "همهٔ ترک‌های افزوده‌شده پاک شدند"
+        }
         timelineView.onSeek = { timeMs ->
             try { videoView.seekTo(timeMs.coerceIn(0L, videoDurationMs).toInt()) } catch (_: Exception) { }
         }
@@ -258,9 +310,11 @@ class MainActivity : Activity() {
                 return@setOnClickListener
             }
             val at = currentPosition.coerceIn(1L, videoDurationMs - 1L)
+            if (!timelineSplitPoints.contains(at)) recordUndoState()
             if (timelineSplitPoints.add(at)) {
                 timelineView.setPlayhead(at)
                 timelineView.setTimeline(videoDurationMs, timelineSplitPoints.toList(), deletedTimelineRanges)
+                trackTimelineView.setClips(trackClips.toList(), videoDurationMs)
                 selectedTimelineRange = null
                 statusText.text = "Cut ثبت شد: ${formatTime(at)}؛ با هر بار زدن، برش دیگری در زمان فعلی پخش ثبت می‌شود"
             } else Toast.makeText(this, "در این زمان برشی ثبت شده است", Toast.LENGTH_SHORT).show()
@@ -271,6 +325,7 @@ class MainActivity : Activity() {
             if (deletedTimelineRanges.none { it.first == range.first && it.second == range.second }) deletedTimelineRanges.add(range)
             selectedTimelineRange = null
             timelineView.setTimeline(videoDurationMs, timelineSplitPoints.toList(), deletedTimelineRanges)
+                trackTimelineView.setClips(trackClips.toList(), videoDurationMs)
             statusText.text = "قطعهٔ ${formatTime(range.first)} تا ${formatTime(range.second)} برای حذف از خروجی علامت خورد"
         }
         findViewById<Button>(R.id.restoreTimelineButton).setOnClickListener {
@@ -278,7 +333,6 @@ class MainActivity : Activity() {
             timelineView.setTimeline(videoDurationMs, emptyList(), emptyList())
             statusText.text = "برش‌ها و حذف‌های نوار زمان بازگردانی شدند"
         }
-        findViewById<Button>(R.id.exportSegmentsSeparatelyButton).setOnClickListener { exportTimelineSegmentsSeparately() }
 
         findViewById<Button>(R.id.openButton).setOnClickListener { chooseVideo() }
         findViewById<Button>(R.id.addAudioButton).setOnClickListener {
@@ -286,7 +340,6 @@ class MainActivity : Activity() {
             chooseExternalAudio()
         }
         findViewById<Button>(R.id.addSubtitleButton).setOnClickListener { chooseExternalSubtitle() }
-        findViewById<Button>(R.id.muxTracksButton).setOnClickListener { exportWithExternalTracks() }
         findViewById<EditText>(R.id.overlayTextInput).addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updateLiveTextPreview() }
@@ -296,7 +349,6 @@ class MainActivity : Activity() {
             statusText.text = "در حال باز کردن انتخاب‌گر ویدیوی رویی…"
             chooseOverlayVideo()
         }
-        findViewById<Button>(R.id.exportOverlayButton).setOnClickListener { exportTextAndVideoOverlay() }
         findViewById<Button>(R.id.joinAfterButton).setOnClickListener { chooseVideosToAppend() }
         findViewById<Button>(R.id.mergeButton).setOnClickListener { if (mergeUris.isEmpty()) chooseVideosForMerge() else mergeSelectedVideos() }
         findViewById<Button>(R.id.vectorButton).setOnClickListener { chooseVideosForVector() }
@@ -308,7 +360,7 @@ class MainActivity : Activity() {
                 return@setOnClickListener
             }
             selectedFrames.clear()
-            selectedFrames.addAll((0 until ROWS * FRAMES_PER_ROW).filter { it !in deletedStoryboardFrames })
+            selectedFrames.addAll((0 until activeStoryboardFrameCount).filter { it !in deletedStoryboardFrames })
             refreshSelectionStyles()
             updateSelectionText()
         }
@@ -318,25 +370,7 @@ class MainActivity : Activity() {
             updateSelectionText()
         }
         findViewById<Button>(R.id.deleteSelectedButton).setOnClickListener { deleteSelectedStoryboardFrames() }
-        selectForDeleteModeButton.setOnClickListener { setStoryboardSelectionMode(false) }
-        selectForExportModeButton.setOnClickListener { setStoryboardSelectionMode(true) }
-        findViewById<Button>(R.id.exportButton).setOnClickListener {
-            // Keep the timeline editor independent from the storyboard. Timeline edits have
-            // priority unless the user explicitly entered storyboard export-selection mode.
-            when {
-                selectedTimelineRange != null -> exportOnlyTimelineRange(selectedTimelineRange!!)
-                timelineSplitPoints.isNotEmpty() || deletedTimelineRanges.isNotEmpty() -> exportTimelineEditedVideo()
-                selectingForExport -> exportSelectedStoryboardFramesSeparately()
-                selectedFrames.isNotEmpty() -> exportSelectedStoryboardFramesSeparately()
-                deletedStoryboardFrames.isNotEmpty() -> exportRemainingVideo(false)
-                else -> {
-                    statusText.text = "برای خروجی، یک بازه از نوار زمان انتخاب کنید یا با Cut تقسیم و سپس قطعهٔ ناخواسته را حذف کنید؛ خروجی استوری‌بورد جداست."
-                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
-                }
-            }
-        }
         findViewById<Button>(R.id.applyColorToSelectedButton).setOnClickListener { applyColorToSelectedFrames() }
-        findViewById<Button>(R.id.colorizePreviewButton).setOnClickListener { exportColorizedVideo() }
         setupManualColorControls()
         timeModeButton.setOnClickListener { showTimeMode() }
         findViewById<Button>(R.id.applyStoryboardTimeRangeButton).setOnClickListener { applyStoryboardTimeRange() }
@@ -369,7 +403,6 @@ class MainActivity : Activity() {
         }
         buildEmptyStoryboard()
         updateModeButtons()
-        updateStoryboardSelectionModeButtons()
         handleIncomingVideoIntent(intent)
     }
 
@@ -479,18 +512,38 @@ class MainActivity : Activity() {
     private fun showAdvancedEditDialog() {
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 8, 24, 8) }
         fun addControl(label: String, maxValue: Int, initial: Int, onValue: (Int) -> Unit) {
-            panel.addView(TextView(this).apply { text = "$label: ${initial}%"; setTextColor(Color.WHITE); textSize = 13f })
-            panel.addView(SeekBar(this).apply {
+            val valueLabel = TextView(this).apply {
+                text = "$label: ${initial}%"; setTextColor(Color.WHITE); textSize = 13f
+            }
+            panel.addView(valueLabel)
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val bar = SeekBar(this).apply {
                 max = maxValue; progress = initial
                 setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                     override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                        (panel.getChildAt(panel.childCount - 2) as TextView).text = "$label: ${progress}%"
+                        valueLabel.text = "$label: ${progress}%"
                         onValue(progress)
                     }
                     override fun onStartTrackingTouch(seekBar: SeekBar?) {}
                     override fun onStopTrackingTouch(seekBar: SeekBar?) {}
                 })
-            })
+            }
+            row.addView(bar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(Button(this).apply {
+                text = "Rest"; textSize = 10f; isAllCaps = false
+                setTextColor(Color.rgb(7, 20, 47)); setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(255, 210, 31)))
+                minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
+                setPadding(6, 0, 6, 0)
+                setOnClickListener {
+                    bar.progress = initial
+                    valueLabel.text = "$label: ${initial}%"
+                    onValue(initial)
+                }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, 36))
+            panel.addView(row)
         }
         var brightness = 100; var contrast = 100; var gamma = 100
         addControl("نور", 200, 100) { brightness = it }
@@ -574,13 +627,17 @@ class MainActivity : Activity() {
             val uri = data.data ?: return
             loadSelectedVideo(uri, true)
         } else if (requestCode == PICK_EXTERNAL_AUDIO) {
-            externalAudioUri = data.data ?: return
-            findViewById<Button>(R.id.addAudioButton).text = "صدا انتخاب شد ✓"
-            statusText.text = "فایل صوتی انتخاب شد؛ برای جایگزینی صدای ویدیوی اصلی، بخش «متن/ویدیوی رویی» را باز کنید و «ساخت خروجی متن/فیلم/صدا» را بزنید. برای افزودن آن به‌صورت ترک جداگانه، از «ساخت خروجی ترک‌ها» استفاده کنید."
+            val picked = collectPickedUris(data)
+            if (picked.isEmpty()) return
+            picked.forEach { uri -> addTrackClip(uri, TrackClipKind.AUDIO) }
+            findViewById<Button>(R.id.addAudioButton).text = "صداها (${trackClips.count { it.kind == TrackClipKind.AUDIO }}) ✓"
+            statusText.text = "${picked.size} فایل صوتی به نوار ترک اضافه شد؛ لبه‌های هر قطعه را برای برش و وسط آن را برای جابه‌جایی بکشید."
         } else if (requestCode == PICK_EXTERNAL_SUBTITLE) {
-            externalSubtitleUri = data.data ?: return
-            findViewById<Button>(R.id.addSubtitleButton).text = "زیرنویس ✓"
-            statusText.text = "زیرنویس انتخاب شد؛ برای افزودن آن به ویدیو، «ساخت خروجی» را بزنید"
+            val picked = collectPickedUris(data)
+            if (picked.isEmpty()) return
+            picked.forEach { uri -> addTrackClip(uri, TrackClipKind.SUBTITLE) }
+            findViewById<Button>(R.id.addSubtitleButton).text = "زیرنویس‌ها (${trackClips.count { it.kind == TrackClipKind.SUBTITLE }}) ✓"
+            statusText.text = "${picked.size} فایل زیرنویس به نوار ترک اضافه شد؛ برای جابه‌جایی یا برش، قطعه را انتخاب و بکشید."
         } else if (requestCode == PICK_OVERLAY_VIDEO) {
             val uri = data.data ?: data.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri ?: return
             try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) { }
@@ -657,8 +714,13 @@ class MainActivity : Activity() {
                 }.sortedBy { it.timeMs }.take(60)
                 mainHandler.post {
                     findViewById<Button>(R.id.imageSceneSearchButton).isEnabled = true
-                    statusText.text = "جست‌وجو تمام شد؛ ${filtered.size} صحنهٔ مشابه پیدا شد"
-                    showImageMatches(filtered)
+                    if (filtered.isEmpty()) {
+                        statusText.text = "صحنهٔ مشابه تازه‌ای پیدا نشد؛ اسلایدهای فعلی حفظ شدند. عکس واضح‌تر یا فریم نزدیک‌تری انتخاب کنید."
+                        Toast.makeText(this, "نتیجه‌ای پیدا نشد", Toast.LENGTH_SHORT).show()
+                    } else {
+                        showImageMatches(filtered)
+                        statusText.text = "${filtered.size} صحنهٔ مشابه در اسلایدهای استوری‌بورد نمایش داده شد؛ برای رفتن به هر صحنه همان اسلاید را لمس کنید."
+                    }
                 }
             } catch (e: Exception) {
                 mainHandler.post {
@@ -681,25 +743,47 @@ class MainActivity : Activity() {
         return 1.0 - diff / pa.size
     }
 
+    /** Replaces the ordinary storyboard grid with image-search matches; no separate results dialog. */
     private fun showImageMatches(matches: List<ImageMatch>) {
-        if (matches.isEmpty()) {
-            AlertDialog.Builder(this).setTitle("نتیجهٔ جست‌وجو")
-                .setMessage("صحنهٔ مشابهی با آستانهٔ فعلی پیدا نشد. عکس واضح‌تر یا فریم نزدیک‌تر را امتحان کنید.")
-                .setPositiveButton("باشه", null).show()
-            return
+        if (matches.isEmpty()) return
+
+        frameBitmaps.values.forEach { if (!it.isRecycled) it.recycle() }
+        frameBitmaps.clear()
+        imageSearchFrameTimes.clear()
+        selectedFrames.clear()
+        storyboardRangeAnchorIndex = null
+        storyboardRows.removeAllViews()
+        frameViews.clear()
+        activeStoryboardFrameCount = matches.size
+
+        val screenWidthDp = resources.displayMetrics.widthPixels / resources.displayMetrics.density
+        val columns = ((screenWidthDp - 12f) / 68f).toInt().coerceIn(3, 6)
+        val cellWidth = ((screenWidthDp - 12f) / columns).toInt().coerceAtLeast(42)
+        val grid = GridLayout(this).apply {
+            columnCount = columns
+            rowCount = (matches.size + columns - 1) / columns
+            useDefaultMargins = false
+            alignmentMode = GridLayout.ALIGN_BOUNDS
         }
-        val scroll = ScrollView(this)
-        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), dp(8), dp(8), dp(8)) }
-        matches.forEach { match ->
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(4), 0, dp(4)) }
-            val image = ImageView(this).apply { setImageBitmap(match.bitmap); layoutParams = LinearLayout.LayoutParams(dp(142), dp(82)); scaleType = ImageView.ScaleType.FIT_CENTER }
-            val label = TextView(this).apply { text = "${formatTime(match.timeMs)}  •  شباهت ${(match.score * 100).toInt()}٪\nبرای رفتن به این صحنه لمس کنید"; setTextColor(Color.WHITE); textSize = 13f; setPadding(dp(8), 0, 0, 0) }
-            row.addView(image); row.addView(label); row.setOnClickListener { videoView.seekTo(match.timeMs.toInt()); videoView.start() }
-            list.addView(row)
+        matches.forEachIndexed { index, match ->
+            imageSearchFrameTimes[index] = match.timeMs
+            frameBitmaps[index] = match.bitmap
+            val cell = makeFrameCell(index, match.bitmap, formatTime(match.timeMs))
+            val params = GridLayout.LayoutParams(
+                GridLayout.spec(GridLayout.UNDEFINED, 1f),
+                GridLayout.spec(GridLayout.UNDEFINED, 1f)
+            ).apply {
+                width = dp(cellWidth)
+                height = dp(64)
+                setMargins(dp(1), dp(1), dp(1), dp(1))
+            }
+            grid.addView(cell, params)
+            frameViews[index] = cell
         }
-        scroll.addView(list)
-        AlertDialog.Builder(this).setTitle("اسلایدشو: ${matches.size} صحنهٔ مشابه")
-            .setView(scroll).setPositiveButton("بستن", null).show()
+        storyboardRows.addView(grid, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+        updateSelectionText()
     }
 
     private object BitmapFactoryCompat {
@@ -761,12 +845,18 @@ class MainActivity : Activity() {
         selectedUri = uri
         storyboardStartMs = 0L
         storyboardEndMs = 0L
-        selectingForExport = false
-        selectedForExportButtonReset()
+        storyboardIntervalMs = null
+        activeStoryboardFrameCount = DEFAULT_STORYBOARD_FRAME_COUNT
+        findViewById<EditText>(R.id.storyboardIntervalTime).setText("")
         timelineSplitPoints.clear()
         deletedTimelineRanges.clear()
         selectedTimelineRange = null
         timelineView.setTimeline(0L, emptyList(), emptyList())
+        trackClips.clear(); selectedTrackClipId = null
+        if (::trackTimelineView.isInitialized) trackTimelineView.setClips(emptyList(), 0L)
+        externalAudioUri = null; externalSubtitleUri = null
+        findViewById<Button>(R.id.addAudioButton).text = "افزودن صدا"
+        findViewById<Button>(R.id.addSubtitleButton).text = "افزودن زیرنویس"
         timelineView.setThumbnails(emptyList())
         selectedFrames.clear()
         frameBitmaps.values.forEach { if (!it.isRecycled) it.recycle() }
@@ -813,11 +903,25 @@ class MainActivity : Activity() {
         green.setOnSeekBarChangeListener(listener)
         blue.setOnSeekBarChangeListener(listener)
         saturation.setOnSeekBarChangeListener(listener)
+
+        // Each Reset button restores only its own control to neutral (1.00).
+        fun bindReset(buttonId: Int, seekBar: SeekBar) {
+            findViewById<Button>(buttonId).setOnClickListener {
+                seekBar.progress = 100
+                updateLabels()
+                refreshLiveColorPreview()
+            }
+        }
+        bindReset(R.id.resetRedColorButton, red)
+        bindReset(R.id.resetGreenColorButton, green)
+        bindReset(R.id.resetBlueColorButton, blue)
+        bindReset(R.id.resetSaturationButton, saturation)
         updateLabels()
     }
 
     /** Save the current RGB combination for every selected storyboard interval. */
     private fun applyColorToSelectedFrames() {
+        recordUndoState()
         if (selectedUri == null || videoDurationMs <= 0L) {
             Toast.makeText(this, "ابتدا ویدیو را انتخاب کنید", Toast.LENGTH_SHORT).show(); return
         }
@@ -916,12 +1020,12 @@ class MainActivity : Activity() {
         if (targetMb == null || targetMb < 1f || targetMb > 4096f) {
             sizeField.error = "حجم هدف را بین 1 تا 4096 مگابایت وارد کنید"; return
         }
-        val button = findViewById<Button>(R.id.colorizePreviewButton)
+        val button = findViewById<Button>(R.id.outputChangesButton)
         button.isEnabled = false
         statusText.text = "در حال ساخت خروجی با اعمال تغییرات رنگ و حجم هدف؛ رمزگذاری مجدد انجام می‌شود…"
         val output = File(cacheDir, "evc_colorized_${System.currentTimeMillis()}.mp4")
         try {
-            val total = ROWS * FRAMES_PER_ROW
+            val total = activeStoryboardFrameCount
             val rangeStart = storyboardStartMs.coerceIn(0L, videoDurationMs)
             val rangeEnd = (if (storyboardEndMs > rangeStart) storyboardEndMs else videoDurationMs)
                 .coerceIn(rangeStart, videoDurationMs)
@@ -1054,10 +1158,241 @@ class MainActivity : Activity() {
         Toast.makeText(this, "این نسخه فقط پیش‌نمایش اسلایدها را رنگی می‌کند؛ خروجی ویدیویی رنگی هنوز فعال نیست", Toast.LENGTH_LONG).show()
     }
 
+    private fun collectPickedUris(data: Intent): List<Uri> {
+        val picked = mutableListOf<Uri>()
+        data.clipData?.let { clip -> for (i in 0 until clip.itemCount) picked.add(clip.getItemAt(i).uri) }
+        data.data?.let { if (it !in picked) picked.add(it) }
+        picked.distinct().forEach { uri ->
+            try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) { }
+        }
+        return picked
+    }
+
+    private fun addTrackClip(uri: Uri, kind: TrackClipKind) {
+        val name = displayNameForUri(uri)
+        val sourceDuration = if (kind == TrackClipKind.AUDIO) {
+            try {
+                val retriever = MediaMetadataRetriever()
+                retriever.setDataSource(this, uri)
+                val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: videoDurationMs
+                retriever.release()
+                duration.coerceAtLeast(1000L)
+            } catch (_: Exception) { videoDurationMs.coerceAtLeast(1000L) }
+        } else videoDurationMs.coerceAtLeast(1000L)
+        val playhead = try { videoView.currentPosition.toLong() } catch (_: Exception) { timelineView.playheadMs }
+        val clip = TrackClip(nextTrackClipId++, uri, kind, name, playhead.coerceAtLeast(0L), 0L,
+            minOf(sourceDuration, (videoDurationMs - playhead).coerceAtLeast(1000L)).coerceAtLeast(1000L), sourceDuration)
+        trackClips.add(clip)
+        selectedTrackClipId = clip.id
+        trackTimelineView.setClips(trackClips.toList(), videoDurationMs)
+        trackTimelineView.selectClip(clip.id)
+        syncLegacyTrackUris()
+    }
+
+    private fun syncLegacyTrackUris() {
+        externalAudioUri = trackClips.firstOrNull { it.kind == TrackClipKind.AUDIO }?.uri
+        externalSubtitleUri = trackClips.firstOrNull { it.kind == TrackClipKind.SUBTITLE }?.uri
+    }
+
+    private fun formatTrackTime(ms: Long): String {
+        val seconds = (ms.coerceAtLeast(0L) / 1000L)
+        return String.format(java.util.Locale.US, "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private fun captureEditorHistoryState() = EditorHistoryState(timelineSplitPoints.toList(), deletedTimelineRanges.toList(), trackClips.toList(), frameColorProfiles.toMap(), listOf(cropLeftPct, cropTopPct, cropRightPct, cropBottomPct), cropSettingsSaved, autoColorEnabled, overlayVideoUri, findViewById<EditText>(R.id.overlayTextInput).text.toString(), textXPercent, textYPercent, liveTextSize, overlayVideoXPercent, overlayVideoYPercent, overlayVideoWidthPercent, mergeUris.toList(), vectorUris.toList(), referenceImageUri)
+
+    private fun recordUndoState() {
+        if (restoringHistory) return
+        undoHistory.addLast(captureEditorHistoryState())
+        while (undoHistory.size > maxHistorySteps) undoHistory.removeFirst()
+        redoHistory.clear(); updateHistoryButtons()
+    }
+
+    private fun restoreEditorHistoryState(state: EditorHistoryState) {
+        restoringHistory = true
+        try {
+            timelineSplitPoints.clear(); timelineSplitPoints.addAll(state.splitPoints)
+            deletedTimelineRanges.clear(); deletedTimelineRanges.addAll(state.deletedRanges)
+            trackClips.clear(); trackClips.addAll(state.clips)
+            frameColorProfiles.clear(); frameColorProfiles.putAll(state.profiles)
+            cropLeftPct=state.crop[0]; cropTopPct=state.crop[1]; cropRightPct=state.crop[2]; cropBottomPct=state.crop[3]; cropSettingsSaved=state.cropSaved
+            autoColorEnabled=state.autoColor; overlayVideoUri=state.overlayUri
+            findViewById<EditText>(R.id.overlayTextInput).setText(state.text)
+            textXPercent=state.textX; textYPercent=state.textY; liveTextSize=state.textSize
+            overlayVideoXPercent=state.overlayX; overlayVideoYPercent=state.overlayY; overlayVideoWidthPercent=state.overlayWidth
+            mergeUris.clear(); mergeUris.addAll(state.merge); vectorUris.clear(); vectorUris.addAll(state.vector); referenceImageUri=state.reference
+            selectedTrackClipId=null; selectedTimelineRange=null
+            timelineView.setTimeline(videoDurationMs, timelineSplitPoints.toList(), deletedTimelineRanges)
+            trackTimelineView.setClips(trackClips.toList(), videoDurationMs); syncLegacyTrackUris()
+            findViewById<Button>(R.id.autoColorButton).text=if(autoColorEnabled) "Auto Color: روشن" else "Auto Color"
+            findViewById<Button>(R.id.pickOverlayVideoButton).text=if(overlayVideoUri!=null) "ویدیوی رویی انتخاب شد ✓" else "انتخاب ویدیوی رویی"
+            findViewById<Button>(R.id.mergeButton).text=if(mergeUris.isEmpty()) "Merge • چند ویدیو" else "Merge • ${mergeUris.size} ویدیو ✓"
+            refreshSelectionStyles(); updateSelectionText(); updateOverlayPreviewLayout()
+            statusText.text="مرحلهٔ ویرایش بازگردانی شد؛ فایل اصلی ویدیو تغییری نکرده است"
+        } finally { restoringHistory=false }
+        updateHistoryButtons()
+    }
+
+    private fun undoEditorStep() {
+        if (undoHistory.isEmpty()) { Toast.makeText(this, "مرحله‌ای برای Undo وجود ندارد", Toast.LENGTH_SHORT).show(); return }
+        redoHistory.addLast(captureEditorHistoryState()); restoreEditorHistoryState(undoHistory.removeLast()); statusText.text="Undo انجام شد"
+    }
+
+    private fun redoEditorStep() {
+        if (redoHistory.isEmpty()) { Toast.makeText(this, "مرحله‌ای برای Redo وجود ندارد", Toast.LENGTH_SHORT).show(); return }
+        undoHistory.addLast(captureEditorHistoryState()); restoreEditorHistoryState(redoHistory.removeLast()); statusText.text="Redo انجام شد"
+    }
+
+    private fun updateHistoryButtons() {
+        findViewById<Button>(R.id.undoButton).apply { isEnabled=undoHistory.isNotEmpty(); alpha=if(isEnabled) 1f else 0.55f }
+        findViewById<Button>(R.id.redoButton).apply { isEnabled=redoHistory.isNotEmpty(); alpha=if(isEnabled) 1f else 0.55f }
+    }
+
+    private fun splitSelectedTrackClip() {
+        val selectedId = selectedTrackClipId ?: run { Toast.makeText(this, "ابتدا یک قطعهٔ صدا یا زیرنویس را انتخاب کنید", Toast.LENGTH_SHORT).show(); return }
+        val clip = trackClips.firstOrNull { it.id == selectedId } ?: return
+        val playhead = try { videoView.currentPosition.toLong() } catch (_: Exception) { timelineView.playheadMs }
+        val offset = playhead - clip.startMs
+        if (offset < 500L || offset > clip.durationMs - 500L) {
+            Toast.makeText(this, "نشانگر پخش باید داخل قطعه و دست‌کم نیم ثانیه دور از لبه‌ها باشد", Toast.LENGTH_LONG).show(); return
+        }
+        val index = trackClips.indexOfFirst { it.id == selectedId }
+        recordUndoState()
+        val first = clip.copy(durationMs = offset)
+        val second = clip.copy(id = nextTrackClipId++, name = clip.name + " (بخش ۲)", startMs = clip.startMs + offset,
+            sourceStartMs = clip.sourceStartMs + offset, durationMs = clip.durationMs - offset)
+        trackClips[index] = first
+        trackClips.add(index + 1, second)
+        selectedTrackClipId = second.id
+        trackTimelineView.setClips(trackClips.toList(), videoDurationMs)
+        trackTimelineView.selectClip(second.id)
+        statusText.text = "ترک به دو بخش جدا تقسیم شد؛ هر بخش را مستقل می‌توانید جابه‌جا یا کوتاه کنید."
+    }
+
+    /** Delete currently selected items directly; only show the legacy options when nothing is selected. */
+    private fun deleteSelectionOrShowOptions() {
+        val trackIds = trackTimelineView.selectedClipIds.toSet()
+        val hasSelection = selectedFrames.isNotEmpty() || trackIds.isNotEmpty() || selectedTrackClipId != null || selectedTimelineRange != null
+        if (!hasSelection) {
+            Toast.makeText(this, "ابتدا موردی را در همان بخش انتخاب کنید؛ برای انتخاب چند ترک، هر ترک را نگه دارید", Toast.LENGTH_LONG).show()
+            return
+        }
+        var removed = 0
+        if (selectedFrames.isNotEmpty()) {
+            val count = selectedFrames.size
+            deleteSelectedStoryboardFrames()
+            removed += count
+        }
+        val idsToRemove = if (trackIds.isNotEmpty()) trackIds else setOfNotNull(selectedTrackClipId)
+        if (idsToRemove.isNotEmpty()) {
+            val before = trackClips.size
+            trackClips.removeAll { it.id in idsToRemove }
+            removed += before - trackClips.size
+            selectedTrackClipId = null
+            trackTimelineView.clearSelection()
+            trackTimelineView.setClips(trackClips.toList(), videoDurationMs)
+            syncLegacyTrackUris()
+            findViewById<Button>(R.id.addAudioButton).text = if (trackClips.any { it.kind == TrackClipKind.AUDIO }) "صداها (${trackClips.count { it.kind == TrackClipKind.AUDIO }}) ✓" else "افزودن صدا"
+            findViewById<Button>(R.id.addSubtitleButton).text = if (trackClips.any { it.kind == TrackClipKind.SUBTITLE }) "زیرنویس‌ها (${trackClips.count { it.kind == TrackClipKind.SUBTITLE }}) ✓" else "افزودن زیرنویس"
+        }
+        selectedTimelineRange?.let { range ->
+            if (deletedTimelineRanges.none { it.first == range.first && it.second == range.second }) deletedTimelineRanges.add(range)
+            selectedTimelineRange = null
+            timelineView.setTimeline(videoDurationMs, timelineSplitPoints.toList(), deletedTimelineRanges)
+            removed++
+        }
+        if (removed == 0) Toast.makeText(this, "مورد انتخاب‌شده‌ای برای حذف وجود ندارد", Toast.LENGTH_SHORT).show()
+        else statusText.text = "$removed مورد انتخاب‌شده برای حذف/حذف از خروجی اعمال شد"
+    }
+
+    /** A central Delete menu for removable items across the main editor sections. */
+    private fun showGlobalDeleteDialog() {
+        val actions = mutableListOf<Pair<String, () -> Unit>>()
+        if (selectedFrames.isNotEmpty()) actions += "اسلایدهای انتخاب‌شده (${selectedFrames.size})" to { deleteSelectedStoryboardFrames() }
+        if (selectedTrackClipId != null && trackClips.any { it.id == selectedTrackClipId }) actions += "قطعهٔ انتخاب‌شدهٔ صدا/زیرنویس" to { deleteSelectedTrackClip() }
+        if (selectedTimelineRange != null) actions += "قطعهٔ انتخاب‌شده از نوار زمان" to {
+            val range = selectedTimelineRange
+            if (range != null) {
+                if (deletedTimelineRanges.none { it.first == range.first && it.second == range.second }) deletedTimelineRanges.add(range)
+                selectedTimelineRange = null
+                timelineView.setTimeline(videoDurationMs, timelineSplitPoints.toList(), deletedTimelineRanges)
+                trackTimelineView.setClips(trackClips.toList(), videoDurationMs)
+                statusText.text = "قطعهٔ انتخاب‌شده برای حذف از خروجی علامت خورد"
+            }
+        }
+        if (selectedFrames.any { frameColorProfiles.containsKey(it) }) actions += "تنظیم رنگ اسلایدهای انتخاب‌شده" to {
+            selectedFrames.forEach { frameColorProfiles.remove(it) }
+            refreshSelectionStyles()
+            statusText.text = "تنظیم رنگ اسلایدهای انتخاب‌شده پاک شد"
+        }
+        if (overlayVideoUri != null) actions += "ویدیوی رویی" to {
+            overlayVideoUri = null
+            releaseOverlayPreviewPlayer()
+            findViewById<Button>(R.id.pickOverlayVideoButton).text = "انتخاب ویدیوی رویی"
+            placementMode = PlacementOverlayView.Mode.NONE
+            placementOverlay.visibility = View.GONE
+            statusText.text = "ویدیوی رویی حذف شد"
+        }
+        if (findViewById<EditText>(R.id.overlayTextInput).text.isNotBlank()) actions += "متن رویی" to {
+            findViewById<EditText>(R.id.overlayTextInput).text.clear()
+            statusText.text = "متن رویی پاک شد"
+        }
+        if (mergeUris.isNotEmpty()) actions += "فهرست ویدیوهای Merge/Join" to {
+            mergeUris.clear()
+            findViewById<Button>(R.id.mergeButton).text = "Merge • چند ویدیو"
+            statusText.text = "فهرست ویدیوهای Merge/Join پاک شد"
+        }
+        if (referenceImageUri != null) actions += "عکس مرجع جست‌وجوی صحنه" to {
+            referenceImageUri = null
+            statusText.text = "عکس مرجع پاک شد"
+        }
+        if (vectorUris.isNotEmpty()) actions += "فهرست ویدیوهای Vector" to {
+            vectorUris.clear()
+            statusText.text = "فهرست ویدیوهای Vector پاک شد"
+        }
+        if (cropSettingsSaved || cropLeftPct != 0 || cropTopPct != 0 || cropRightPct != 0 || cropBottomPct != 0) actions += "تنظیمات Free Crop" to {
+            cropLeftPct = 0; cropTopPct = 0; cropRightPct = 0; cropBottomPct = 0
+            cropSettingsSaved = false; freeCropMode = false
+            cropOverlay.visibility = View.GONE; freeCropControls.visibility = View.GONE
+            statusText.text = "تنظیمات Free Crop پاک شد"
+        }
+        if (timelineSplitPoints.isNotEmpty() || deletedTimelineRanges.isNotEmpty()) actions += "همهٔ برش‌ها و حذف‌های نوار زمان" to {
+            timelineSplitPoints.clear(); deletedTimelineRanges.clear(); selectedTimelineRange = null
+            timelineView.setTimeline(videoDurationMs, emptyList(), emptyList())
+            statusText.text = "برش‌ها و حذف‌های نوار زمان پاک شدند"
+        }
+        if (actions.isEmpty()) {
+            Toast.makeText(this, "مورد قابل‌حذفی انتخاب نشده است؛ ابتدا یک اسلاید، قطعه یا مورد را انتخاب کنید", Toast.LENGTH_LONG).show()
+            return
+        }
+        val labels = actions.map { it.first }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Delete • حذف عمومی")
+            .setItems(labels) { dialog, which ->
+                actions[which].second.invoke()
+                dialog.dismiss()
+            }
+            .setNegativeButton("انصراف", null)
+            .show()
+    }
+
+    private fun deleteSelectedTrackClip() {
+        val id = selectedTrackClipId ?: run { Toast.makeText(this, "ابتدا یک قطعهٔ ترک را انتخاب کنید", Toast.LENGTH_SHORT).show(); return }
+        recordUndoState()
+        trackClips.removeAll { it.id == id }
+        selectedTrackClipId = null
+        trackTimelineView.setClips(trackClips.toList(), videoDurationMs)
+        syncLegacyTrackUris()
+        findViewById<Button>(R.id.addAudioButton).text = if (trackClips.any { it.kind == TrackClipKind.AUDIO }) "صداها (${trackClips.count { it.kind == TrackClipKind.AUDIO }}) ✓" else "افزودن صدا"
+        findViewById<Button>(R.id.addSubtitleButton).text = if (trackClips.any { it.kind == TrackClipKind.SUBTITLE }) "زیرنویس‌ها (${trackClips.count { it.kind == TrackClipKind.SUBTITLE }}) ✓" else "افزودن زیرنویس"
+        statusText.text = "قطعهٔ انتخاب‌شده حذف شد"
+    }
+
     private fun chooseExternalAudio() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "audio/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         }
         try { startActivityForResult(intent, PICK_EXTERNAL_AUDIO) }
@@ -1069,6 +1404,7 @@ class MainActivity : Activity() {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/x-subrip", "text/plain", "text/vtt", "application/x-ass", "application/x-ssa", "application/octet-stream"))
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         }
         try { startActivityForResult(intent, PICK_EXTERNAL_SUBTITLE) }
@@ -1097,6 +1433,101 @@ class MainActivity : Activity() {
         return destination
     }
 
+    /** Export timeline audio/subtitle clips at their visible positions while stream-copying the source video. */
+    private fun exportTrackTimeline() {
+        val sourceUri = selectedUri ?: run { Toast.makeText(this, "ابتدا ویدیوی اصلی را انتخاب کنید", Toast.LENGTH_LONG).show(); return }
+        val clips = trackClips.toList().filter { it.durationMs > 0L }
+        if (clips.isEmpty()) return
+        val button = findViewById<Button>(R.id.outputChangesButton)
+        button.isEnabled = false
+        statusText.text = "در حال ساخت خروجی از نوار ترک‌ها؛ کدک تصویر اصلی حفظ می‌شود…"
+        worker.execute {
+            val tempFiles = mutableListOf<File>()
+            var output: File? = null
+            var error: String? = null
+            try {
+                val sourceFile = copyUriToCache(sourceUri, "evc_tracks_source")
+                tempFiles.add(sourceFile)
+                val audioClips = clips.filter { it.kind == TrackClipKind.AUDIO }
+                val subtitleClips = clips.filter { it.kind == TrackClipKind.SUBTITLE }
+                val audioFiles = audioClips.map { clip -> copyUriToCache(clip.uri, "evc_timeline_audio").also { tempFiles.add(it) } }
+                val subtitleFiles = subtitleClips.map { clip -> copyUriToCache(clip.uri, "evc_timeline_subtitle").also { tempFiles.add(it) } }
+                output = File(cacheDir, "evc_timeline_tracks_${System.currentTimeMillis()}.${outputExtension()}")
+                val args = mutableListOf("-y", "-i", sourceFile.absolutePath)
+                // One independent input per clip lets split pieces be moved separately.
+                audioFiles.forEach { args.addAll(listOf("-i", it.absolutePath)) }
+                val subtitleInputIndexes = mutableListOf<Int>()
+                subtitleFiles.forEachIndexed { index, file ->
+                    val clip = subtitleClips[index]
+                    args.addAll(listOf("-itsoffset", String.format(java.util.Locale.US, "%.3f", clip.startMs / 1000.0),
+                        "-ss", String.format(java.util.Locale.US, "%.3f", clip.sourceStartMs / 1000.0),
+                        "-t", String.format(java.util.Locale.US, "%.3f", clip.durationMs / 1000.0), "-i", file.absolutePath))
+                    subtitleInputIndexes.add(1 + audioFiles.size + index)
+                }
+                val sourceHasAudio = try {
+                    val extractor = MediaExtractor(); extractor.setDataSource(sourceFile.absolutePath)
+                    val found = (0 until extractor.trackCount).any { extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true }
+                    extractor.release(); found
+                } catch (_: Exception) { false }
+                if (audioClips.isNotEmpty()) {
+                    val filters = mutableListOf<String>()
+                    var mixCount = 0
+                    if (sourceHasAudio) { filters.add("[0:a:0]asetpts=PTS-STARTPTS,volume=1[evc_orig]"); mixCount++ }
+                    audioClips.forEachIndexed { index, clip ->
+                        val inputIndex = index + 1
+                        val start = String.format(java.util.Locale.US, "%.3f", clip.sourceStartMs / 1000.0)
+                        val duration = String.format(java.util.Locale.US, "%.3f", clip.durationMs / 1000.0)
+                        val delay = clip.startMs.coerceAtLeast(0L)
+                        filters.add("[$inputIndex:a:0]atrim=start=$start:duration=$duration,asetpts=PTS-STARTPTS,adelay=${delay}|${delay}[evc_a$index]")
+                        mixCount++
+                    }
+                    val mixInputs = mutableListOf<String>()
+                    if (sourceHasAudio) mixInputs.add("[evc_orig]")
+                    audioClips.indices.forEach { mixInputs.add("[evc_a$it]") }
+                    filters.add(mixInputs.joinToString("") + "amix=inputs=$mixCount:duration=longest:dropout_transition=0[evc_mix]")
+                    args.addAll(listOf("-filter_complex", filters.joinToString(";"), "-map", "0:v:0", "-map", "[evc_mix]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k"))
+                } else {
+                    args.addAll(listOf("-map", "0:v:0", "-map", "0:a?", "-c:v", "copy", "-c:a", "copy"))
+                }
+                subtitleInputIndexes.forEach { index -> args.addAll(listOf("-map", "$index:s:0")) }
+                if (subtitleInputIndexes.isNotEmpty()) args.addAll(listOf("-c:s", if (outputContainerMatroska) "copy" else "mov_text"))
+                if (!outputContainerMatroska) args.addAll(listOf("-movflags", "+faststart"))
+                args.addAll(listOf("-max_muxing_queue_size", "2048", "-f", if (outputContainerMatroska) "matroska" else "mp4"))
+                if (videoDurationMs > 0L) args.addAll(listOf("-t", String.format(java.util.Locale.US, "%.3f", videoDurationMs / 1000.0)))
+                args.add(output.absolutePath)
+                val session = FFmpegKit.executeWithArguments(args.toTypedArray())
+                if (!ReturnCode.isSuccess(session.returnCode) || !output.exists() || output.length() == 0L) {
+                    throw IllegalStateException("ساخت خروجی ترک‌ها ناموفق بود: ${session.allLogsAsString.takeLast(1400)}")
+                }
+            } catch (e: Exception) {
+                error = e.message ?: e.javaClass.simpleName
+                output?.delete(); output = null
+            } finally { tempFiles.forEach { it.delete() } }
+            mainHandler.post {
+                button.isEnabled = true
+                val result = output
+                if (result == null || !result.exists() || result.length() == 0L) {
+                    statusText.text = "خروجی ترک‌ها ناموفق بود: ${error ?: "خطای ناشناخته"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show(); result?.delete(); return@post
+                }
+                try {
+                    val ext = outputExtension()
+                    val values = ContentValues().apply {
+                        put(MediaStore.Video.Media.DISPLAY_NAME, "EVC_Timeline_${System.currentTimeMillis()}.$ext")
+                        put(MediaStore.Video.Media.MIME_TYPE, outputMimeType())
+                        if (android.os.Build.VERSION.SDK_INT >= 29) { put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EVC"); put(MediaStore.Video.Media.IS_PENDING, 1) }
+                    }
+                    val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values) ?: throw IllegalStateException("ساخت فایل در Movies/EVC ناموفق بود")
+                    contentResolver.openOutputStream(uri)?.use { out -> FileInputStream(result).use { it.copyTo(out) } } ?: throw IllegalStateException("نوشتن خروجی ناموفق بود")
+                    if (android.os.Build.VERSION.SDK_INT >= 29) contentResolver.update(uri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+                    result.delete()
+                    statusText.text = "خروجی نوار ترک‌ها در Movies/EVC ذخیره شد؛ کدک ویدیوی اصلی بدون رمزگذاری مجدد حفظ شد. صداهای افزوده‌شده با صدای اصلی ترکیب شدند."
+                    Toast.makeText(this, "خروجی نوار ترک‌ها ذخیره شد", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) { result.delete(); statusText.text = "ذخیره خروجی ناموفق بود: ${e.message}"; Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show() }
+            }
+        }
+    }
+
     private fun exportWithExternalTracks() {
         val sourceUri = selectedUri
         val audioUri = externalAudioUri
@@ -1118,7 +1549,7 @@ class MainActivity : Activity() {
             exportAdditionalAudioTrackWithMediaMuxer(sourceUri, audioUri)
             return
         }
-        val button = findViewById<Button>(R.id.muxTracksButton)
+        val button = findViewById<Button>(R.id.outputChangesButton)
         button.isEnabled = false
         findViewById<Button>(R.id.addAudioButton).isEnabled = false
         findViewById<Button>(R.id.addSubtitleButton).isEnabled = false
@@ -1217,7 +1648,7 @@ class MainActivity : Activity() {
      * subtitle track is requested and the selected output container is MP4.
      */
     private fun exportAdditionalAudioTrackWithMediaMuxer(sourceUri: Uri, audioUri: Uri) {
-        val button = findViewById<Button>(R.id.muxTracksButton)
+        val button = findViewById<Button>(R.id.outputChangesButton)
         button.isEnabled = false
         findViewById<Button>(R.id.addAudioButton).isEnabled = false
         findViewById<Button>(R.id.addSubtitleButton).isEnabled = false
@@ -1400,7 +1831,7 @@ class MainActivity : Activity() {
     private fun exportAudioReplacementWithTransformer(
         sourceUri: Uri, audioUri: Uri, text: String, textSize: Int, textX: Int, textY: Int
     ) {
-        val button = findViewById<Button>(R.id.exportOverlayButton)
+        val button = findViewById<Button>(R.id.outputChangesButton)
         button.isEnabled = false
         statusText.text = "در حال ساخت خروجی صدا با موتور داخلی اندروید…"
         val output = File(cacheDir, "evc_audio_${System.currentTimeMillis()}.mp4")
@@ -1488,7 +1919,7 @@ class MainActivity : Activity() {
     /** Text-only export through Media3 Transformer, avoiding FFmpegKit native execution. */
     @androidx.media3.common.util.UnstableApi
     private fun exportTextOnlyWithTransformer(sourceUri: Uri, text: String, textSize: Int, textX: Int, textY: Int) {
-        val button = findViewById<Button>(R.id.exportOverlayButton)
+        val button = findViewById<Button>(R.id.outputChangesButton)
         button.isEnabled = false
         statusText.text = "در حال ساخت خروجی متن با موتور داخلی اندروید…"
         val output = File(cacheDir, "evc_text_${System.currentTimeMillis()}.mp4")
@@ -1713,7 +2144,7 @@ class MainActivity : Activity() {
             exportAudioReplacementWithTransformer(sourceUri, audioUri, text, textSize, textX, textY)
             return
         }
-        val button = findViewById<Button>(R.id.exportOverlayButton)
+        val button = findViewById<Button>(R.id.outputChangesButton)
         button.isEnabled = false
         statusText.text = "در حال ساخت خروجی متن/ویدیو/صدا…"
         worker.execute {
@@ -1740,7 +2171,7 @@ class MainActivity : Activity() {
                     graph.add("[evc_base][evc_small]overlay=x='main_w*$videoX/100':y='main_h*$videoY/100':eof_action=pass[evc_with_video]")
                     current = "evc_with_video"
                 }
-                if (textFile != null) {
+                if (requiresVideoReencode && textFile != null) {
                     val safePath = textFile.absolutePath.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
                     val startSeconds = ((textStartMs ?: 0L).toDouble() / 1000.0).let { String.format(java.util.Locale.US, "%.3f", it) }
                     val endSeconds = ((textEndMs ?: videoDurationMs).toDouble() / 1000.0).let { String.format(java.util.Locale.US, "%.3f", it) }
@@ -1905,6 +2336,7 @@ class MainActivity : Activity() {
     private fun buildEmptyStoryboard() {
         storyboardRows.removeAllViews()
         frameViews.clear()
+        imageSearchFrameTimes.clear()
 
         // Show every storyboard frame in one fixed wrapping grid. No horizontal
         // per-row scrolling or row rearranging is needed to reach hidden frames.
@@ -1913,11 +2345,11 @@ class MainActivity : Activity() {
         val cellWidth = ((screenWidthDp - 12f) / columns).toInt().coerceAtLeast(42)
         val grid = GridLayout(this).apply {
             columnCount = columns
-            rowCount = (ROWS * FRAMES_PER_ROW + columns - 1) / columns
+            rowCount = (activeStoryboardFrameCount + columns - 1) / columns
             useDefaultMargins = false
             alignmentMode = GridLayout.ALIGN_BOUNDS
         }
-        for (index in 0 until ROWS * FRAMES_PER_ROW) {
+        for (index in 0 until activeStoryboardFrameCount) {
             if (index in deletedStoryboardFrames) continue
             val cell = makeFrameCell(index, null, "${index + 1}")
             val params = GridLayout.LayoutParams(
@@ -2005,7 +2437,7 @@ class MainActivity : Activity() {
     private fun seekToStoryboardFrame(index: Int) {
         val rangeStart = storyboardStartMs.coerceIn(0L, videoDurationMs)
         val rangeEnd = (if (storyboardEndMs > rangeStart) storyboardEndMs else videoDurationMs).coerceIn(rangeStart, videoDurationMs)
-        val timeMs = storyboardTimestampForIndex(index, ROWS * FRAMES_PER_ROW, rangeStart, rangeEnd)
+        val timeMs = storyboardTimestampForIndex(index, activeStoryboardFrameCount, rangeStart, rangeEnd)
         timelineView.setPlayhead(timeMs)
         try { videoView.seekTo(timeMs.toInt()) } catch (_: Exception) { }
     }
@@ -2018,6 +2450,7 @@ class MainActivity : Activity() {
 
     /** Returns the timestamp represented by a storyboard cell. Blank interval keeps the automatic spacing. */
     private fun storyboardTimestampForIndex(index: Int, count: Int, startMs: Long, endMs: Long): Long {
+        imageSearchFrameTimes[index]?.let { return it.coerceIn(startMs, endMs) }
         val interval = storyboardIntervalMs
         return if (interval != null && interval > 0L) {
             startMs + index.toLong() * interval
@@ -2026,6 +2459,7 @@ class MainActivity : Activity() {
 
     private fun loadStoryboard(uri: Uri) {
         val generation = ++storyboardGeneration
+        val countForThisLoad = activeStoryboardFrameCount
         worker.execute {
             var retriever: MediaMetadataRetriever? = null
             try {
@@ -2046,13 +2480,14 @@ class MainActivity : Activity() {
                     // Initialize the timeline with the selected video's duration.
                     // Without this, TimelineView remains in its empty state and cannot draw thumbnails.
                     timelineView.setTimeline(duration, timelineSplitPoints.toList(), deletedTimelineRanges)
+                    trackTimelineView.setClips(trackClips.toList(), duration)
                     statusText.text = if (duration > 0) "مدت ویدیو ${formatTime(duration)} • در حال استخراج فریم‌ها…" else "در حال استخراج فریم‌ها…"
                 }
                 // Generate a small, dedicated timeline strip first; it no longer waits for all 120
                 // storyboard images and is not rebuilt/sorted after every individual frame.
                 loadTimelineThumbnails(uri, duration, generation)
 
-                val count = ROWS * FRAMES_PER_ROW
+                val count = countForThisLoad
                 for (index in 0 until count) {
                     if (generation != storyboardGeneration) break
                     if (index in deletedStoryboardFrames) continue
@@ -2087,7 +2522,7 @@ class MainActivity : Activity() {
                 }
                 mainHandler.post {
                     if (generation == storyboardGeneration) {
-                        statusText.text = "استوری‌بورد زمانی آماده است: ۸ ردیف × ۱۵ فریم"
+                        statusText.text = "استوری‌بورد کامل آماده است: $activeStoryboardFrameCount اسلاید در ${((activeStoryboardFrameCount + 5) / 6)} ردیف تقریبی؛ اسلایدهای اضافه موقت‌اند و با بازگشت به فاصلهٔ خودکار حذف می‌شوند"
                     }
                 }
             } catch (_: Exception) {
@@ -2132,11 +2567,16 @@ class MainActivity : Activity() {
     private fun showTimeMode() {
         storyboardStartMs = 0L
         storyboardEndMs = videoDurationMs
+        storyboardIntervalMs = null
+        activeStoryboardFrameCount = DEFAULT_STORYBOARD_FRAME_COUNT
+        cleanupTemporaryStoryboardCells()
+        selectedFrames.clear()
+        storyboardRangeAnchorIndex = null
+        findViewById<EditText>(R.id.storyboardIntervalTime).setText("")
         findViewById<android.widget.EditText>(R.id.storyboardStartTime).setText("00:00")
         findViewById<android.widget.EditText>(R.id.storyboardEndTime).setText(formatTime(videoDurationMs))
         frameViews.forEach { (index, view) -> view.visibility = if (index in deletedStoryboardFrames) View.GONE else View.VISIBLE }
         updateModeButtons()
-        updateStoryboardSelectionModeButtons()
         val uri = selectedUri
         if (uri != null && videoDurationMs > 0L) reloadStoryboardForRange(uri)
         statusText.text = "نمایش زمانی کامل: از 00:00 تا ${formatTime(videoDurationMs)}"
@@ -2196,16 +2636,49 @@ class MainActivity : Activity() {
             Toast.makeText(this, "فاصله را به ثانیه یا دقیقه:ثانیه وارد کنید", Toast.LENGTH_LONG).show(); return
         }
         intervalField.error = null
-        storyboardIntervalMs = interval
         storyboardStartMs = start
         storyboardEndMs = end
+        val rangeLength = end - start
+        if (interval == null) {
+            // Returning to automatic spacing removes any temporary extra storyboard cells.
+            storyboardIntervalMs = null
+            activeStoryboardFrameCount = DEFAULT_STORYBOARD_FRAME_COUNT
+            cleanupTemporaryStoryboardCells()
+        } else {
+            val requestedCount = ((rangeLength + interval - 1L) / interval).coerceAtLeast(1L)
+            activeStoryboardFrameCount = requestedCount.coerceAtMost(MAX_STORYBOARD_FRAME_COUNT.toLong()).toInt()
+            // If a tiny interval would require an impractically large grid, widen it slightly
+            // so the final cell still reaches the end of the requested video range.
+            val effectiveInterval = if (requestedCount > MAX_STORYBOARD_FRAME_COUNT) {
+                (rangeLength + activeStoryboardFrameCount - 1L) / activeStoryboardFrameCount
+            } else interval
+            storyboardIntervalMs = effectiveInterval
+            if (effectiveInterval != interval) {
+                intervalField.setText(formatTime(effectiveInterval))
+                Toast.makeText(this, "برای نمایش کامل ویدیو، فاصله به ${formatTime(effectiveInterval)} تنظیم شد تا تعداد اسلایدها از $MAX_STORYBOARD_FRAME_COUNT بیشتر نشود", Toast.LENGTH_LONG).show()
+            }
+        }
+        selectedFrames.clear()
+        storyboardRangeAnchorIndex = null
         reloadStoryboardForRange(uri)
-        statusText.text = if (interval == null) "استوری‌بورد بازهٔ ${formatTime(start)} تا ${formatTime(end)} با فاصلهٔ خودکار در حال آماده‌سازی است" else "استوری‌بورد با فاصلهٔ ${formatTime(interval)} بین اسلایدها در حال آماده‌سازی است"
+        statusText.text = if (interval == null) "استوری‌بورد بازهٔ ${formatTime(start)} تا ${formatTime(end)} با فاصلهٔ خودکار آماده می‌شود؛ اسلایدهای موقت قبلی حذف می‌شوند" else "در حال ساخت ${activeStoryboardFrameCount} اسلاید برای پوشش کامل بازهٔ ${formatTime(start)} تا ${formatTime(end)}…"
+    }
+
+    /** Forget per-cell state belonging to temporary cells once the grid returns to its base size. */
+    private fun cleanupTemporaryStoryboardCells() {
+        selectedFrames.removeAll { it >= DEFAULT_STORYBOARD_FRAME_COUNT }
+        deletedStoryboardFrames.removeAll { it >= DEFAULT_STORYBOARD_FRAME_COUNT }
+        frameColorProfiles.keys.removeAll { it >= DEFAULT_STORYBOARD_FRAME_COUNT }
+        imageSearchFrameTimes.keys.removeAll { it >= DEFAULT_STORYBOARD_FRAME_COUNT }
     }
 
     private fun reloadStoryboardForRange(uri: Uri) {
+        imageSearchFrameTimes.clear()
         frameBitmaps.values.forEach { if (!it.isRecycled) it.recycle() }
         frameBitmaps.clear()
+        // Rebuild the grid to match the newly computed cell count. Any temporary
+        // extra cells from the previous custom interval disappear here.
+        buildEmptyStoryboard()
         timelineView.setThumbnails(emptyList())
         previewBitmaps.values.forEach { if (!it.isRecycled) it.recycle() }
         previewBitmaps.clear()
@@ -2220,37 +2693,8 @@ class MainActivity : Activity() {
         return Bitmap.createScaledBitmap(source, width, height, true).also { if (it !== source && !source.isRecycled) source.recycle() }
     }
 
-    private fun selectedForExportButtonReset() {
-        if (::selectForDeleteModeButton.isInitialized && ::selectForExportModeButton.isInitialized) updateStoryboardSelectionModeButtons()
-        if (findViewById<Button>(R.id.exportButton) != null) findViewById<Button>(R.id.exportButton).text = "خروجی بدون تغییر کدک"
-    }
-
-    private fun setStoryboardSelectionMode(exportMode: Boolean) {
-        selectingForExport = exportMode
-        // A previously selected timeline segment must not override storyboard selection.
-        // The export button is shared by both workflows, so clear that stale selection
-        // whenever the user explicitly switches to storyboard export/delete mode.
-        selectedTimelineRange = null
-        selectedFrames.clear()
-        refreshSelectionStyles()
-        updateSelectionText()
-        updateStoryboardSelectionModeButtons()
-        findViewById<Button>(R.id.exportButton).text = if (exportMode) "خروجی بدون تغییر کدک: اسلایدهای انتخاب‌شده" else "خروجی بدون تغییر کدک"
-        statusText.text = if (exportMode) "حالت خروجی: اسلایدهای موردنظر را انتخاب کنید؛ فقط همان بازه‌ها خروجی می‌شوند" else "حالت حذف: اسلایدهای ناخواسته را انتخاب و سپس «حذف بازه‌ها» را بزنید"
-    }
-
-    private fun updateStoryboardSelectionModeButtons() {
-        selectForDeleteModeButton.backgroundTintList = android.content.res.ColorStateList.valueOf(if (!selectingForExport) Color.rgb(255, 210, 31) else Color.rgb(37, 69, 111))
-        selectForDeleteModeButton.setTextColor(if (!selectingForExport) Color.rgb(7, 20, 47) else Color.WHITE)
-        selectForExportModeButton.backgroundTintList = android.content.res.ColorStateList.valueOf(if (selectingForExport) Color.rgb(67, 217, 163) else Color.rgb(37, 69, 111))
-        selectForExportModeButton.setTextColor(if (selectingForExport) Color.rgb(7, 20, 47) else Color.WHITE)
-    }
-
     private fun deleteSelectedStoryboardFrames() {
-        if (selectingForExport) {
-            Toast.makeText(this, "اکنون حالت خروجی از انتخاب‌شده‌ها فعال است؛ برای حذف، دکمهٔ «انتخاب برای حذف» را بزنید", Toast.LENGTH_LONG).show()
-            return
-        }
+        recordUndoState()
         if (selectedFrames.isEmpty()) {
             Toast.makeText(this, "ابتدا فریم‌هایی را انتخاب کنید", Toast.LENGTH_SHORT).show()
             return
@@ -2360,7 +2804,7 @@ class MainActivity : Activity() {
             Toast.makeText(this, "تمام بخش‌های نوار زمان حذف شده‌اند؛ چیزی برای خروجی باقی نمانده است", Toast.LENGTH_LONG).show()
             return
         }
-        val button = findViewById<Button>(R.id.exportButton)
+        val button = findViewById<Button>(R.id.outputChangesButton)
         button.isEnabled = false
         statusText.text = "در حال ساخت یک خروجی از بخش‌های باقی‌ماندهٔ نوار زمان، بدون رمزگذاری مجدد…"
         worker.execute {
@@ -2422,7 +2866,7 @@ class MainActivity : Activity() {
             Toast.makeText(this, "قطعهٔ قابل ذخیره‌ای باقی نمانده است", Toast.LENGTH_LONG).show()
             return
         }
-        val button = findViewById<Button>(R.id.exportSegmentsSeparatelyButton)
+        val button = findViewById<Button>(R.id.outputChangesButton)
         button.isEnabled = false
         statusText.text = "در حال ذخیرهٔ ${segments.size} قطعه به‌صورت فایل‌های جداگانه و بدون رمزگذاری مجدد…"
         worker.execute {
@@ -2499,7 +2943,7 @@ class MainActivity : Activity() {
             cropOverlay.visibility = View.VISIBLE
             freeCropControls.visibility = View.VISIBLE
             cropSettingsSaved = false
-            statusText.text = "Free Crop فعال است: چهار دستگیرهٔ گوشهٔ کادر را روی پلیر بکشید؛ سپس «ثبت محدوده» یا «خروجی Crop» را بزنید"
+            statusText.text = "Free Crop فعال است: چهار دستگیرهٔ گوشهٔ کادر را روی پلیر بکشید؛ سپس «ثبت محدوده» را بزنید و برای فایل نهایی از «خروجی تغییرات» استفاده کنید"
         } else {
             cropOverlay.visibility = View.GONE
             freeCropControls.visibility = View.GONE
@@ -2533,6 +2977,13 @@ class MainActivity : Activity() {
         private var right = 0.92f
         private var bottom = 0.92f
         private var activeCorner = -1
+        private var draggingFrame = false
+        private var dragStartX = 0f
+        private var dragStartY = 0f
+        private var dragStartLeft = 0f
+        private var dragStartTop = 0f
+        private var dragStartRight = 0f
+        private var dragStartBottom = 0f
         private val handleRadius get() = 16f * resources.displayMetrics.density
 
         init { visibility = View.GONE; isClickable = true }
@@ -2580,10 +3031,25 @@ class MainActivity : Activity() {
                     } ?: -1
                     val nearest = corners.getOrNull(activeCorner)
                     if (nearest == null || kotlin.math.hypot((nearest.first - x).toDouble(), (nearest.second - y).toDouble()) > handleRadius * 2.5) activeCorner = -1
+                    // Touching inside the crop frame moves the whole frame; touching a corner resizes it.
+                    draggingFrame = activeCorner == -1 && x in (left * width)..(right * width) && y in (top * height)..(bottom * height)
+                    dragStartX = x; dragStartY = y
+                    dragStartLeft = left; dragStartTop = top; dragStartRight = right; dragStartBottom = bottom
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val minX = 0.08f; val minY = 0.08f
+                    if (draggingFrame) {
+                        val dx = (x - dragStartX) / width.coerceAtLeast(1)
+                        val dy = (y - dragStartY) / height.coerceAtLeast(1)
+                        val frameW = dragStartRight - dragStartLeft
+                        val frameH = dragStartBottom - dragStartTop
+                        left = (dragStartLeft + dx).coerceIn(0f, 1f - frameW)
+                        top = (dragStartTop + dy).coerceIn(0f, 1f - frameH)
+                        right = left + frameW
+                        bottom = top + frameH
+                        invalidate(); return true
+                    }
                     when (activeCorner) {
                         0 -> { left = (x / width).coerceIn(0f, right - minX); top = (y / height).coerceIn(0f, bottom - minY) }
                         1 -> { right = (x / width).coerceIn(left + minX, 1f); top = (y / height).coerceIn(0f, bottom - minY) }
@@ -2594,6 +3060,7 @@ class MainActivity : Activity() {
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     activeCorner = -1
+                    draggingFrame = false
                     parent?.requestDisallowInterceptTouchEvent(false)
                     performClick()
                     return true
@@ -2603,6 +3070,233 @@ class MainActivity : Activity() {
         }
 
         override fun performClick(): Boolean { super.performClick(); return true }
+    }
+
+    /** Unified final export combining configured crop, color, text, overlay video, audio and subtitle. */
+    private fun exportCombinedChanges() {
+        val sourceUri = selectedUri
+        if (sourceUri == null) {
+            Toast.makeText(this, "ابتدا ویدیوی اصلی را انتخاب کنید", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (freeCropMode) {
+            readCropOverlay()
+            if (!validCropMargins()) return
+            cropSettingsSaved = true
+            freeCropMode = false
+            cropOverlay.visibility = View.GONE
+            freeCropControls.visibility = View.GONE
+        }
+        val text = findViewById<EditText>(R.id.overlayTextInput).text.toString().trim()
+        val secondUri = overlayVideoUri
+        val audioUri = externalAudioUri
+        val subtitleUri = externalSubtitleUri
+        val textStartMs = if (text.isNotEmpty()) parseTimeInput(findViewById<EditText>(R.id.overlayTextStartTime).text.toString()) else 0L
+        val textEndMs = if (text.isNotEmpty()) parseTimeInput(findViewById<EditText>(R.id.overlayTextEndTime).text.toString()) else videoDurationMs
+        if (text.isNotEmpty() && (textStartMs == null || textEndMs == null || textEndMs <= textStartMs)) {
+            Toast.makeText(this, "زمان شروع و پایان متن را درست وارد کنید", Toast.LENGTH_LONG).show(); return
+        }
+        if (cropSettingsSaved && !validCropMargins()) return
+
+        // Keep legacy timeline/storyboard-only workflows reachable from the single visible output button.
+        val rgbNow = currentRgbProfile()
+        val globalColorChanged = rgbNow != RgbProfile(1f, 1f, 1f, 1f)
+        val hasCombinedEdits = (cropSettingsSaved && (cropLeftPct > 0 || cropTopPct > 0 || cropRightPct > 0 || cropBottomPct > 0)) ||
+            text.isNotEmpty() || secondUri != null || audioUri != null || subtitleUri != null || globalColorChanged || autoColorEnabled
+        val hasTimelineEdits = selectedTimelineRange != null || timelineSplitPoints.isNotEmpty() || deletedTimelineRanges.isNotEmpty()
+        val hasStoryboardEdits = selectedFrames.isNotEmpty() || deletedStoryboardFrames.isNotEmpty()
+        val otherVisualEdits = (cropSettingsSaved && (cropLeftPct > 0 || cropTopPct > 0 || cropRightPct > 0 || cropBottomPct > 0)) ||
+            text.isNotEmpty() || secondUri != null || globalColorChanged || autoColorEnabled
+        if (trackClips.isNotEmpty() && !otherVisualEdits && !hasTimelineEdits && !hasStoryboardEdits && frameColorProfiles.isEmpty()) {
+            exportTrackTimeline()
+            return
+        }
+        if (trackClips.isNotEmpty() && otherVisualEdits) {
+            Toast.makeText(this, "جایگاه و برش ترک‌های نوار در خروجی مستقل اعمال می‌شود؛ برای حفظ زمان‌بندی ترک‌ها ابتدا خروجی ترک‌ها را بگیرید یا ویرایش تصویری را جداگانه صادر کنید.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (hasTimelineEdits && !hasCombinedEdits) {
+            when {
+                selectedTimelineRange != null -> exportOnlyTimelineRange(selectedTimelineRange!!)
+                else -> exportTimelineEditedVideo()
+            }
+            return
+        }
+        if (hasStoryboardEdits && !hasCombinedEdits && !hasTimelineEdits) {
+            if (selectedFrames.isNotEmpty()) exportSelectedStoryboardFramesSeparately()
+            else exportRemainingVideo(false)
+            return
+        }
+        if (frameColorProfiles.isNotEmpty() && !hasCombinedEdits && !hasTimelineEdits && !hasStoryboardEdits) {
+            exportColorizedVideo()
+            return
+        }
+        if (hasTimelineEdits && hasCombinedEdits) {
+            Toast.makeText(this, "برش‌های نوار زمان هنوز با افکت‌های تصویری/صدا در یک فیلتر واحد ترکیب نشده‌اند؛ ابتدا برش‌های نوار زمان را بازنشانی کنید یا فقط خروجی برش را بگیرید.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (hasStoryboardEdits && hasCombinedEdits) {
+            Toast.makeText(this, "انتخاب‌های خروجی استوری‌بورد با افکت‌های سراسری هنوز در یک خروجی ترکیب نمی‌شوند؛ ابتدا انتخاب استوری‌بورد را لغو کنید.", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val button = findViewById<Button>(R.id.outputChangesButton)
+        button.isEnabled = false
+        statusText.text = "در حال ترکیب تغییرات تصویری و ترک‌های پشتیبانی‌شده در یک خروجی…"
+        worker.execute {
+            var baseFile: File? = null
+            var overlayFile: File? = null
+            var audioFile: File? = null
+            var subtitleFile: File? = null
+            var textFile: File? = null
+            var output: File? = null
+            var error: String? = null
+            try {
+                baseFile = copyUriToCache(sourceUri, "evc_combined_base")
+                if (secondUri != null) overlayFile = copyUriToCache(secondUri, "evc_combined_overlay")
+                if (audioUri != null) audioFile = copyUriToCache(audioUri, "evc_combined_audio")
+                if (subtitleUri != null) subtitleFile = copyUriToCache(subtitleUri, "evc_combined_subtitle")
+                if (text.isNotEmpty()) {
+                    textFile = File(cacheDir, "evc_combined_text_${System.currentTimeMillis()}.txt")
+                    textFile.writeText(text, Charsets.UTF_8)
+                }
+                val ext = outputExtension()
+                output = File(cacheDir, "evc_changes_${System.currentTimeMillis()}.$ext")
+                val args = mutableListOf("-y", "-filter_threads", "1", "-filter_complex_threads", "1", "-threads", "1", "-i", baseFile.absolutePath)
+                var nextInput = 1
+                val overlayIndex = if (overlayFile != null) nextInput++ else null
+                if (overlayFile != null) args.addAll(listOf("-stream_loop", "-1", "-i", overlayFile.absolutePath))
+                val audioIndex = if (audioFile != null) nextInput++ else null
+                if (audioFile != null) args.addAll(listOf("-i", audioFile.absolutePath))
+                val subtitleIndex = if (subtitleFile != null) nextInput++ else null
+                if (subtitleFile != null) args.addAll(listOf("-i", subtitleFile.absolutePath))
+
+                val cropChanged = cropSettingsSaved && (cropLeftPct > 0 || cropTopPct > 0 || cropRightPct > 0 || cropBottomPct > 0)
+                // Audio/subtitle-only exports must not touch the video bitstream. Use FFmpeg
+                // stream copy unless a real visual edit requires filtering/re-encoding.
+                val requiresVideoReencode = cropChanged || text.isNotEmpty() || secondUri != null || globalColorChanged || autoColorEnabled
+                val graph = mutableListOf<String>()
+                var current = "0:v"
+                if (requiresVideoReencode && cropChanged) {
+                    val widthPct = (100 - cropLeftPct - cropRightPct).coerceIn(10, 100)
+                    val heightPct = (100 - cropTopPct - cropBottomPct).coerceIn(10, 100)
+                    graph.add("[$current]crop=iw*$widthPct/100:ih*$heightPct/100:iw*$cropLeftPct/100:ih*$cropTopPct/100[evc_crop]")
+                    current = "evc_crop"
+                }
+                if (requiresVideoReencode && autoColorEnabled) {
+                    // Heuristic colorization: bright pixels lean sky-blue, darker midtones green,
+                    // and middle/high midtones warm. This is not semantic AI object recognition.
+                    graph.add("[$current]format=gray,split=7[evc_sky_src][evc_green_src][evc_skin_src][evc_sky_luma][evc_green_luma][evc_skin_luma][evc_gray_final]")
+                    graph.add("[evc_sky_src]colorize=hue=210:saturation=0.32:mix=0.62,format=yuv420p[evc_sky]")
+                    graph.add("[evc_green_src]colorize=hue=105:saturation=0.28:mix=0.48,format=yuv420p[evc_green]")
+                    graph.add("[evc_skin_src]colorize=hue=25:saturation=0.24:mix=0.34,format=yuv420p[evc_skin]")
+                    graph.add("[evc_sky_luma]lut=y='if(gte(val,175),255,0)'[evc_sky_mask]")
+                    graph.add("[evc_green_luma]lut=y='if(between(val,35,145),255,0)'[evc_green_mask]")
+                    graph.add("[evc_skin_luma]lut=y='if(between(val,90,205),255,0)'[evc_skin_mask]")
+                    graph.add("[evc_gray_final]format=yuv420p[evc_gray_colorbase]")
+                    graph.add("[evc_gray_colorbase][evc_sky][evc_sky_mask]maskedmerge[evc_auto_sky]")
+                    graph.add("[evc_auto_sky][evc_green][evc_green_mask]maskedmerge[evc_auto_green]")
+                    graph.add("[evc_auto_green][evc_skin][evc_skin_mask]maskedmerge[evc_auto]")
+                    current = "evc_auto"
+                val rgb = currentRgbProfile()
+                if (requiresVideoReencode) {
+                    graph.add("[$current]colorchannelmixer=rr=${rgb.red}:gg=${rgb.green}:bb=${rgb.blue},eq=saturation=${rgb.saturation}[evc_color]")
+                    current = "evc_color"
+                }
+                if (requiresVideoReencode && overlayIndex != null) {
+                    val w = overlayVideoWidthPercent.coerceIn(5, 90)
+                    val x = overlayVideoXPercent.coerceIn(0, 100 - w)
+                    val y = overlayVideoYPercent.coerceIn(0, 95)
+                    graph.add("[$overlayIndex:v][$current]scale2ref=w=main_w*$w/100:h=ow/mdar[evc_small][evc_base]")
+                    graph.add("[evc_base][evc_small]overlay=x='main_w*$x/100':y='main_h*$y/100':eof_action=pass[evc_overlay]")
+                    current = "evc_overlay"
+                }
+                if (requiresVideoReencode && textFile != null) {
+                    val safePath = textFile.absolutePath.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+                    val startSeconds = String.format(java.util.Locale.US, "%.3f", (textStartMs ?: 0L) / 1000.0)
+                    val endSeconds = String.format(java.util.Locale.US, "%.3f", (textEndMs ?: videoDurationMs) / 1000.0)
+                    val draw = "drawtext=fontfile='/system/fonts/Roboto-Regular.ttf':textfile='$safePath':fontsize=${liveTextSize.coerceIn(8,160)}:fontcolor=white:borderw=2:bordercolor=black:x='w*${textXPercent.coerceIn(0,100)}/100':y='h*${textYPercent.coerceIn(0,100)}/100':enable='between(t\\,$startSeconds\\,$endSeconds)'"
+                    graph.add("[$current]$draw[evc_text]")
+                    current = "evc_text"
+                }
+                if (requiresVideoReencode) {
+                    args.addAll(listOf("-filter_complex", graph.joinToString(";"), "-map", "[$current]"))
+                    args.addAll(listOf("-c:v", "libx264", "-preset", "ultrafast", "-tune", "fastdecode", "-threads", "1", "-crf", "20", "-pix_fmt", "yuv420p"))
+                } else {
+                    // No visual changes: retain the exact original video codec/bitstream.
+                    args.addAll(listOf("-map", "0:v:0", "-c:v", "copy"))
+                }
+                if (audioIndex != null) {
+                    // Only the selected audio is encoded if needed; the video remains stream-copied.
+                    args.addAll(listOf("-map", "$audioIndex:a:0", "-af", "apad", "-c:a", "aac", "-b:a", "192k", "-shortest"))
+                } else if (requiresVideoReencode) {
+                    // Keep the legacy compatible audio encode only when the image is being rendered.
+                    args.addAll(listOf("-map", "0:a?", "-c:a", "aac", "-b:a", "192k"))
+                } else {
+                    // Audio/subtitle-only export also preserves the source audio bitstream.
+                    args.addAll(listOf("-map", "0:a?", "-c:a", "copy"))
+                }
+                if (subtitleIndex != null) {
+                    args.addAll(listOf("-map", "$subtitleIndex:s:0"))
+                    args.addAll(listOf("-c:s", if (outputContainerMatroska) "copy" else "mov_text"))
+                }
+                if (!outputContainerMatroska) args.addAll(listOf("-movflags", "+faststart"))
+                args.addAll(listOf("-max_muxing_queue_size", "1024", "-f", if (outputContainerMatroska) "matroska" else "mp4", output.absolutePath))
+                val session = FFmpegKit.executeWithArguments(args.toTypedArray())
+                if (!ReturnCode.isSuccess(session.returnCode) || !output.exists() || output.length() == 0L) {
+                    throw IllegalStateException("ساخت خروجی تغییرات ناموفق بود: ${session.allLogsAsString.takeLast(1600)}")
+                }
+            } catch (e: Exception) {
+                error = e.message ?: e.javaClass.simpleName
+                output?.delete(); output = null
+            } finally {
+                baseFile?.delete(); overlayFile?.delete(); audioFile?.delete(); subtitleFile?.delete(); textFile?.delete()
+            }
+            mainHandler.post {
+                button.isEnabled = true
+                val result = output
+                if (result == null || !result.exists() || result.length() == 0L) {
+                    statusText.text = "خروجی تغییرات ناموفق بود: ${error ?: "خطای ناشناخته"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                    result?.delete()
+                    return@post
+                }
+                try {
+                    val finalExt = outputExtension()
+                    val values = ContentValues().apply {
+                        put(MediaStore.Video.Media.DISPLAY_NAME, "EVC_Changes_${System.currentTimeMillis()}.$finalExt")
+                        put(MediaStore.Video.Media.MIME_TYPE, outputMimeType())
+                        if (android.os.Build.VERSION.SDK_INT >= 29) {
+                            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EVC")
+                            put(MediaStore.Video.Media.IS_PENDING, 1)
+                        }
+                    }
+                    val outUri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IllegalStateException("ساخت فایل در Movies/EVC ممکن نشد")
+                    contentResolver.openOutputStream(outUri)?.use { stream -> FileInputStream(result).use { it.copyTo(stream) } }
+                        ?: throw IllegalStateException("نوشتن فایل خروجی ناموفق بود")
+                    if (android.os.Build.VERSION.SDK_INT >= 29) contentResolver.update(outUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+                    result.delete()
+                    val applied = mutableListOf<String>()
+                    if (cropSettingsSaved && (cropLeftPct > 0 || cropTopPct > 0 || cropRightPct > 0 || cropBottomPct > 0)) applied.add("Crop")
+                    applied.add("رنگ")
+                    if (text.isNotEmpty()) applied.add("متن")
+                    if (secondUri != null) applied.add("ویدیوی رویی")
+                    if (audioUri != null) applied.add("صدای جایگزین")
+                    if (subtitleUri != null) applied.add("زیرنویس")
+                    statusText.text = if (!requiresVideoReencode) {
+                        "خروجی (${applied.joinToString("، ")}) در Movies/EVC ذخیره شد؛ کدک ویدیوی اصلی بدون رمزگذاری مجدد حفظ شد."
+                    } else {
+                        "خروجی مشترک (${applied.joinToString("، ")}) در Movies/EVC ذخیره شد؛ برای اعمال تغییرات تصویری، ویدیو دوباره رمزگذاری شد."
+                    }
+                    Toast.makeText(this, "خروجی تغییرات در Movies/EVC ذخیره شد", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    result.delete()
+                    statusText.text = "ذخیرهٔ خروجی تغییرات ناموفق بود: ${e.message ?: "خطا"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     private fun exportCroppedVideo() {
@@ -2696,7 +3390,7 @@ class MainActivity : Activity() {
             Toast.makeText(this, "ابتدا یک ویدیوی معتبر انتخاب کنید", Toast.LENGTH_SHORT).show()
             return
         }
-        val total = ROWS * FRAMES_PER_ROW
+        val total = activeStoryboardFrameCount
         val requestedFrames = selectedFrames.toSet()
         if (onlySelected && requestedFrames.isEmpty()) {
             Toast.makeText(this, "برای این حالت، ابتدا اسلایدهایی را که باید در خروجی باشند انتخاب کنید", Toast.LENGTH_LONG).show()
@@ -2711,7 +3405,7 @@ class MainActivity : Activity() {
         // The target-size/re-encoding mode will be added separately to avoid silently
         // changing codec or quality in the original-quality mode.
         statusText.text = if (onlySelected) "در حال ساخت خروجی بدون تغییر کدک از اسلایدهای انتخاب‌شده…" else "در حال ساخت خروجی بدون تغییر کدک از بازه‌های باقی‌مانده…"
-        findViewById<Button>(R.id.exportButton).isEnabled = false
+        findViewById<Button>(R.id.outputChangesButton).isEnabled = false
         worker.execute {
             var result: File? = null
             var error: String? = null
@@ -2749,7 +3443,7 @@ class MainActivity : Activity() {
                 error = e.message ?: e.javaClass.simpleName
             }
             mainHandler.post {
-                findViewById<Button>(R.id.exportButton).isEnabled = true
+                findViewById<Button>(R.id.outputChangesButton).isEnabled = true
                 val file = result
                 if (file != null && file.exists() && file.length() > 0L) {
                     try {
@@ -2795,7 +3489,7 @@ class MainActivity : Activity() {
         val start = range.first.coerceIn(0L, videoDurationMs)
         val end = range.second.coerceIn(0L, videoDurationMs)
         if (end <= start) { Toast.makeText(this, "بازهٔ انتخاب‌شده معتبر نیست", Toast.LENGTH_SHORT).show(); return }
-        val button = findViewById<Button>(R.id.exportButton)
+        val button = findViewById<Button>(R.id.outputChangesButton)
         button.isEnabled = false
         statusText.text = "در حال خروجی گرفتن فقط از ${formatTime(start)} تا ${formatTime(end)}…"
         worker.execute {
@@ -2847,7 +3541,7 @@ class MainActivity : Activity() {
             Toast.makeText(this, "ابتدا یک ویدیوی معتبر انتخاب کنید", Toast.LENGTH_SHORT).show()
             return
         }
-        val total = ROWS * FRAMES_PER_ROW
+        val total = activeStoryboardFrameCount
         val chosen = selectedFrames.toSet()
             .filter { it in 0 until total && it !in deletedStoryboardFrames }
             .sorted()
@@ -2903,7 +3597,7 @@ class MainActivity : Activity() {
             return
         }
 
-        val button = findViewById<Button>(R.id.exportButton)
+        val button = findViewById<Button>(R.id.outputChangesButton)
         button.isEnabled = false
         statusText.text = "در حال ساخت خروجی فقط از ${normalizedSelectedRanges.size} بازهٔ پیوستهٔ انتخاب‌شده؛ اسلایدهای انتخاب‌نشده وارد خروجی نمی‌شوند…"
         worker.execute {
@@ -3119,7 +3813,7 @@ class MainActivity : Activity() {
         badge?.visibility = if (index in selectedFrames) View.VISIBLE else View.GONE
     }
     private fun updateSelectionText() {
-        selectionText.text = "${if (selectingForExport) "برای خروجی" else "برای حذف"}: ${selectedFrames.size} • باقی‌مانده: ${frameViews.size} از ${ROWS * FRAMES_PER_ROW}"
+        selectionText.text = "اسلایدهای انتخاب‌شده: ${selectedFrames.size} • باقی‌مانده: ${frameViews.size} از $activeStoryboardFrameCount؛ انتخاب‌ها مستقیماً برای حذف یا خروجی آماده‌اند"
         refreshSelectionStyles()
     }
     private fun formatTime(ms: Long): String {
@@ -3145,8 +3839,8 @@ class MainActivity : Activity() {
     }
     companion object {
         private const val REQUEST_VIDEO = 2101
-        private const val ROWS = 8
-        private const val FRAMES_PER_ROW = 15
+        private const val DEFAULT_STORYBOARD_FRAME_COUNT = 120
+        private const val MAX_STORYBOARD_FRAME_COUNT = 1200
     }
 }
 
@@ -3323,4 +4017,139 @@ class TimelineView(context: android.content.Context, attrs: android.util.Attribu
     override fun performClick(): Boolean { super.performClick(); return true }
     private fun span(e: MotionEvent): Float { if (e.pointerCount < 2) return 0f; val dx=e.getX(0)-e.getX(1); val dy=e.getY(0)-e.getY(1); return kotlin.math.sqrt(dx*dx+dy*dy) }
     private fun format(ms: Long): String { val s=(ms.coerceAtLeast(0L)/1000L); return String.format(java.util.Locale.US, "%02d:%02d", s/60, s%60) }
+}
+
+
+/** Two-lane timeline for externally added audio and subtitle clips. Drag a clip body to move it; drag either edge to trim. */
+class TrackTimelineView(context: android.content.Context, attrs: android.util.AttributeSet? = null) : View(context, attrs) {
+    var onClipSelected: ((TrackClip?) -> Unit)? = null
+    var onClipsChanged: ((List<TrackClip>) -> Unit)? = null
+    var selectedClipId: Long? = null
+        private set
+    val selectedClipIds: MutableSet<Long> = linkedSetOf()
+    private var downAtMs = 0L
+    private var longPressedSelection = false
+    private var clips: List<TrackClip> = emptyList()
+    private var videoDurationMs: Long = 0L
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val d = resources.displayMetrics.density
+    private var downX = 0f
+    private var downY = 0f
+    private var activeId: Long? = null
+    private var mode = 0 // 0 move, 1 trim left, 2 trim right
+    private var moved = false
+    private var original: TrackClip? = null
+    private var originalList: List<TrackClip> = emptyList()
+
+    fun setClips(items: List<TrackClip>, duration: Long) {
+        clips = items.toList(); videoDurationMs = duration.coerceAtLeast(1L)
+        if (selectedClipId != null && clips.none { it.id == selectedClipId }) selectedClipId = null
+        selectedClipIds.retainAll(clips.map { it.id }.toSet())
+        invalidate()
+    }
+    fun selectClip(id: Long) { selectedClipId = id; selectedClipIds.clear(); selectedClipIds.add(id); onClipSelected?.invoke(clips.firstOrNull { it.id == id }); invalidate() }
+    fun clearSelection() { selectedClipIds.clear(); selectedClipId = null; onClipSelected?.invoke(null); invalidate() }
+    private fun xFor(ms: Long): Float = (ms.toDouble() / videoDurationMs.toDouble()).toFloat().coerceIn(0f, 1f) * width
+    private fun timeFor(x: Float): Long = ((x / width.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f) * videoDurationMs).toLong()
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val laneH = height / 2f
+        p.textSize = 9f * d
+        for (lane in 0..1) {
+            val top = lane * laneH
+            p.color = if (lane == 0) Color.rgb(17, 37, 59) else Color.rgb(33, 27, 54)
+            canvas.drawRect(0f, top, width.toFloat(), top + laneH, p)
+            p.color = Color.rgb(180, 202, 229)
+            canvas.drawText(if (lane == 0) "AUDIO" else "SUBTITLE", 4f * d, top + 10f * d, p)
+        }
+        if (videoDurationMs <= 1L) {
+            p.color = Color.LTGRAY; canvas.drawText("پس از انتخاب ویدیو، ترک‌ها در اینجا نمایش داده می‌شوند", 8f * d, height / 2f, p); return
+        }
+        clips.forEach { clip ->
+            val lane = if (clip.kind == TrackClipKind.AUDIO) 0 else 1
+            val laneTop = lane * laneH
+            val left = xFor(clip.startMs)
+            val right = xFor(clip.startMs + clip.durationMs)
+            val rect = RectF(left, laneTop + 14f * d, maxOf(left + 12f * d, right), laneTop + laneH - 3f * d)
+            p.color = when {
+                clip.id in selectedClipIds && clip.kind == TrackClipKind.AUDIO -> Color.rgb(255, 190, 48)
+                clip.id in selectedClipIds -> Color.rgb(218, 166, 255)
+                clip.kind == TrackClipKind.AUDIO -> Color.rgb(64, 151, 229)
+                else -> Color.rgb(153, 103, 204)
+            }
+            canvas.drawRoundRect(rect, 4f * d, 4f * d, p)
+            p.color = Color.BLACK; p.textSize = 8f * d
+            val label = clip.name.take(22) + "  ${clip.durationMs / 1000}s"
+            canvas.save(); canvas.clipRect(rect); canvas.drawText(label, rect.left + 5f * d, rect.centerY() + 3f * d, p); canvas.restore()
+            p.color = Color.WHITE
+            canvas.drawRect(rect.left, rect.top, minOf(rect.right, rect.left + 4f * d), rect.bottom, p)
+            canvas.drawRect(maxOf(rect.left, rect.right - 4f * d), rect.top, rect.right, rect.bottom, p)
+        }
+        val playhead = try { (context as? MainActivity)?.let { it.findViewById<TimelineView>(R.id.timelineView).playheadMs } ?: 0L } catch (_: Exception) { 0L }
+        p.color = Color.WHITE; p.strokeWidth = 1.2f * d; canvas.drawLine(xFor(playhead), 0f, xFor(playhead), height.toFloat(), p)
+    }
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = event.x; downY = event.y; moved = false
+                downAtMs = android.os.SystemClock.uptimeMillis(); longPressedSelection = false
+                val lane = if (event.y < height / 2f) TrackClipKind.AUDIO else TrackClipKind.SUBTITLE
+                val hit = clips.asReversed().firstOrNull { clip ->
+                    if (clip.kind != lane) false else {
+                        val l = xFor(clip.startMs); val r = xFor(clip.startMs + clip.durationMs)
+                        event.x >= l - 5f * d && event.x <= r + 5f * d
+                    }
+                }
+                activeId = hit?.id; original = hit; originalList = clips.toList()
+                if (hit != null) {
+                    selectedClipId = hit.id
+                    val left = xFor(hit.startMs); val right = xFor(hit.startMs + hit.durationMs)
+                    mode = when { abs(event.x - left) <= 12f * d -> 1; abs(event.x - right) <= 12f * d -> 2; else -> 0 }
+                    onClipSelected?.invoke(hit); invalidate()
+                } else { selectedClipId = null; onClipSelected?.invoke(null); invalidate() }
+                parent?.requestDisallowInterceptTouchEvent(true)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val id = activeId ?: return true
+                val clip = original ?: return true
+                val delta = timeFor(event.x) - timeFor(downX)
+                if (abs(event.x - downX) > 3f * d) moved = true
+                if (!moved) return true
+                val list = clips.toMutableList(); val i = list.indexOfFirst { it.id == id }; if (i < 0) return true
+                val updated = when (mode) {
+                    1 -> {
+                        val newStart = (clip.startMs + delta).coerceIn(0L, clip.startMs + clip.durationMs - 500L)
+                        val shift = newStart - clip.startMs
+                        clip.copy(startMs = newStart, sourceStartMs = (clip.sourceStartMs + shift).coerceAtLeast(0L), durationMs = clip.durationMs - shift)
+                    }
+                    2 -> clip.copy(durationMs = (clip.durationMs + delta).coerceIn(500L, maxOf(500L, videoDurationMs - clip.startMs)))
+                    else -> clip.copy(startMs = (clip.startMs + delta).coerceIn(0L, maxOf(0L, videoDurationMs - clip.durationMs)))
+                }
+                list[i] = updated; clips = list; invalidate(); onClipsChanged?.invoke(clips)
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!moved && activeId != null) {
+                    val held = android.os.SystemClock.uptimeMillis() - downAtMs
+                    if (event.actionMasked == MotionEvent.ACTION_UP && held >= android.view.ViewConfiguration.getLongPressTimeout()) {
+                        activeId?.let { id ->
+                            if (!selectedClipIds.add(id)) selectedClipIds.remove(id)
+                            selectedClipId = selectedClipIds.lastOrNull()
+                            longPressedSelection = true
+                            onClipSelected?.invoke(clips.firstOrNull { it.id == selectedClipId })
+                        }
+                    } else if (!longPressedSelection) {
+                        selectedClipIds.clear(); activeId?.let { selectedClipIds.add(it) }
+                        onClipSelected?.invoke(clips.firstOrNull { it.id == activeId })
+                    }
+                    invalidate()
+                }
+                activeId = null; original = null; parent?.requestDisallowInterceptTouchEvent(false)
+                performClick(); return true
+            }
+        }
+        return true
+    }
+    override fun performClick(): Boolean { super.performClick(); return true }
 }
