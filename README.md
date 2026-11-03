@@ -1,8 +1,32 @@
-## Version 0.2.118 — Wider Crop and Vector buttons
+## Version 0.2.123 — Actual overlay-video preview in the player
+
+- Selecting a secondary video now creates a real muted, looping preview over the main player instead of showing only a labeled placeholder rectangle.
+- The preview follows the X/Y/width fields and the draggable placement frame, uses the selected video's aspect ratio, and stays beneath the crop/placement handles.
+- Preview playback errors are reported in the status line; final export remains a separate action.
+- ZIP/XML checks only; Android build and on-device playback have not been verified in this environment.
+
+## Version 0.2.121 — Consolidated export actions row
+
+- Moved the main export actions into one dedicated horizontal row near the timeline: stream-copy export, final text/overlay export, audio/subtitle track output, crop output, color output, and separate timeline segments.
+- The row scrolls horizontally on narrow screens so buttons stay together without shrinking into unreadable widths. Existing button IDs and click handlers are preserved.
+
+## Version 0.2.120 — Centered source-ratio player and crop drag scroll lock
+
+- The visible player viewport is sized to the source video's aspect ratio and centered horizontally. Text/video placement and Crop overlays use the same viewport bounds to improve coordinate alignment between preview and exported video.
+- Vertical page scrolling is blocked while dragging the Crop corner handles and re-enabled when the gesture ends or is cancelled.
+
+## Version 0.2.119 — Timeline export separation and safer text encoding
+
+- Fixed the main export button so timeline edits are handled separately from storyboard selection.
+- When timeline Cut points/deleted ranges exist, the button exports the remaining timeline as one video without asking for storyboard slides.
+- Text/video overlay export keeps H.264 output but uses conservative low-memory x264 settings for 32-bit ARM devices.
+- Build and device testing have not been performed in this environment.
+
+## Version 0.2.119 — Wider Crop and Vector buttons
 
 - Increased the Crop and Vector button widths from 58dp to 90dp each. Other button properties are unchanged.
 
-## Version 0.2.118 — Wider Crop and Vector buttons
+## Version 0.2.119 — Wider Crop and Vector buttons
 
 The “ثبت شروع از پخش” and “ثبت پایان از پخش” controls are now in the same row as Cut, delete selected segment, and restore segments. All five buttons have equal widths and heights.
 
@@ -55,7 +79,7 @@ The “ثبت شروع از پخش” and “ثبت پایان از پخش” co
 
 # EVCtow — Android video editor
 
-**Project version:** 0.2.118  
+**Project version:** 0.2.121  
 **Android minimum SDK:** 24 (Android 7.0)  
 **Build:** GitHub Actions / Gradle 8.9 / JDK 17
 
@@ -76,7 +100,7 @@ It is configured to run on:
 - pull requests targeting any branch;
 - manual launch through **Actions → EVCtow Android Build → Run workflow**.
 
-On success, the workflow uploads an artifact named `EVCtow-0.2.118-ARM32-TextVideoAudio-Controls-debug-apk` containing the debug APK.
+On success, the workflow uploads an artifact named `EVCtow-0.2.121-ARM32-TextVideoAudio-Controls-debug-apk` containing the debug APK.
 
 ## Uploading to a new repository
 

@@ -14,7 +14,8 @@ import kotlin.math.sqrt
 class PlacementOverlayView(
     context: Context,
     private val onPositionChanged: (xPercent: Int, yPercent: Int) -> Unit,
-    private val onTextSizeChanged: (size: Int) -> Unit = {}
+    private val onTextSizeChanged: (size: Int) -> Unit = {},
+    private val onVideoBoundsChanged: (xPercent: Int, yPercent: Int, widthPercent: Int) -> Unit = { _, _, _ -> }
 ) : View(context) {
     enum class Mode { NONE, TEXT, VIDEO }
 
@@ -30,6 +31,11 @@ class PlacementOverlayView(
     private var startXPercent = 0
     private var startYPercent = 0
     private var dragging = false
+    private var resizingCorner = -1 // 0=TL, 1=TR, 2=BL, 3=BR
+    private var startWidthPercent = 25
+    private var startHeightPercent = 25
+    private var startLeftPercent = 0
+    private var startTopPercent = 0
     private var pinchStartDistance = 0f
     private var pinchStartTextSize = 36
     private var textSizeValue = 36
@@ -120,6 +126,12 @@ class PlacementOverlayView(
         return sqrt(dx * dx + dy * dy)
     }
 
+    private fun distance(x1: Float, y1: Float, x2: Float, y2: Float): Float {
+        val dx = x1 - x2
+        val dy = y1 - y2
+        return sqrt(dx * dx + dy * dy)
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (visibility != VISIBLE || width <= 0 || height <= 0) return false
         val mode = tag as? Mode ?: Mode.NONE
@@ -127,6 +139,20 @@ class PlacementOverlayView(
             MotionEvent.ACTION_DOWN -> {
                 downX = event.x; downY = event.y
                 startXPercent = xPercent; startYPercent = yPercent
+                startWidthPercent = widthPercent; startHeightPercent = heightPercent
+                startLeftPercent = xPercent; startTopPercent = yPercent
+                val left = width * xPercent / 100f
+                val top = height * yPercent / 100f
+                val right = min(width.toFloat(), left + width * widthPercent / 100f)
+                val bottom = min(height.toFloat(), top + height * heightPercent / 100f)
+                val handle = 28f * resources.displayMetrics.density
+                resizingCorner = if (mode == Mode.VIDEO) when {
+                    distance(event.x, event.y, left, top) <= handle -> 0
+                    distance(event.x, event.y, right, top) <= handle -> 1
+                    distance(event.x, event.y, left, bottom) <= handle -> 2
+                    distance(event.x, event.y, right, bottom) <= handle -> 3
+                    else -> -1
+                } else -1
                 dragging = true
                 parent?.requestDisallowInterceptTouchEvent(true)
                 return true
@@ -140,6 +166,29 @@ class PlacementOverlayView(
                 }
             }
             MotionEvent.ACTION_MOVE -> {
+                if (mode == Mode.VIDEO && resizingCorner >= 0 && event.pointerCount == 1) {
+                    val dxPct = ((event.x - downX) * 100f / width).toInt()
+                    val dyPct = ((event.y - downY) * 100f / height).toInt()
+                    var newW = startWidthPercent
+                    var newH = startHeightPercent
+                    var newX = startLeftPercent
+                    var newY = startTopPercent
+                    when (resizingCorner) {
+                        0 -> { newW = startWidthPercent - dxPct; newH = startHeightPercent - dyPct; newX = startLeftPercent + dxPct; newY = startTopPercent + dyPct }
+                        1 -> { newW = startWidthPercent + dxPct; newH = startHeightPercent - dyPct; newY = startTopPercent + dyPct }
+                        2 -> { newW = startWidthPercent - dxPct; newH = startHeightPercent + dyPct; newX = startLeftPercent + dxPct }
+                        3 -> { newW = startWidthPercent + dxPct; newH = startHeightPercent + dyPct }
+                    }
+                    newW = newW.coerceIn(5, 90)
+                    newH = newH.coerceIn(5, 95)
+                    newX = newX.coerceIn(0, 100 - newW)
+                    newY = newY.coerceIn(0, 100 - newH)
+                    xPercent = newX; yPercent = newY
+                    widthPercent = newW; heightPercent = newH
+                    invalidate()
+                    onVideoBoundsChanged(xPercent, yPercent, widthPercent)
+                    return true
+                }
                 if (mode == Mode.TEXT && event.pointerCount >= 2 && pinchStartDistance > 0f) {
                     val ratio = distance(event) / pinchStartDistance
                     val updated = (pinchStartTextSize * ratio).toInt().coerceIn(8, 160)
@@ -168,6 +217,7 @@ class PlacementOverlayView(
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 dragging = false
+                resizingCorner = -1
                 pinchStartDistance = 0f
                 parent?.requestDisallowInterceptTouchEvent(false)
                 performClick()

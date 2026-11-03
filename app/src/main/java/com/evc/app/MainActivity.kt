@@ -13,6 +13,10 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.media.MediaMetadataRetriever
+import android.media.MediaPlayer
+import android.graphics.SurfaceTexture
+import android.view.TextureView
+import android.view.Surface
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
@@ -118,6 +122,15 @@ class MainActivity : Activity() {
     private val PICK_OVERLAY_VIDEO = 7309
     private val PICK_APPEND_VIDEOS = 7310
     private var overlayVideoUri: Uri? = null
+    private lateinit var overlayVideoLayer: FrameLayout
+    private lateinit var overlayPreviewTexture: TextureView
+    private var overlayPreviewPlayer: MediaPlayer? = null
+    private var overlayPreviewSurface: Surface? = null
+    private var overlayPreviewVideoWidth = 16
+    private var overlayPreviewVideoHeight = 9
+    private var overlayVideoXPercent = 70
+    private var overlayVideoYPercent = 5
+    private var overlayVideoWidthPercent = 25
     private var textXPercent = 5
     private var textYPercent = 5
     private var liveTextSize = 36
@@ -142,20 +155,43 @@ class MainActivity : Activity() {
         setContentView(R.layout.activity_main)
         videoView = findViewById(R.id.videoView)
         val playerContainer = findViewById<FrameLayout>(R.id.playerContainer)
+        // A real second-video preview sits above the source video and below the crop/placement handles.
+        overlayVideoLayer = FrameLayout(this)
+        overlayVideoLayer.visibility = View.GONE
+        playerContainer.addView(overlayVideoLayer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        overlayPreviewTexture = TextureView(this)
+        overlayVideoLayer.addView(overlayPreviewTexture, FrameLayout.LayoutParams(1, 1))
+        overlayPreviewTexture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+                startOverlayPreviewOnSurface(surfaceTexture)
+            }
+            override fun onSurfaceTextureSizeChanged(surfaceTexture: SurfaceTexture, width: Int, height: Int) = updateOverlayPreviewLayout()
+            override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
+                releaseOverlayPreviewPlayer()
+                return true
+            }
+            override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) = Unit
+        }
         cropOverlay = FreeCropOverlayView()
         playerContainer.addView(cropOverlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         placementOverlay = PlacementOverlayView(this, { xPct, yPct ->
             when (placementMode) {
                 PlacementOverlayView.Mode.TEXT -> { textXPercent = xPct; textYPercent = yPct }
                 PlacementOverlayView.Mode.VIDEO -> {
-                    findViewById<EditText>(R.id.overlayVideoXInput).setText(xPct.toString())
-                    findViewById<EditText>(R.id.overlayVideoYInput).setText(yPct.toString())
+                    overlayVideoXPercent = xPct
+                    overlayVideoYPercent = yPct
+                    updateOverlayPreviewLayout()
                 }
                 else -> Unit
             }
         }, { newSize ->
             liveTextSize = newSize.coerceIn(8, 160)
             placementOverlay.setTextPreview(findViewById<EditText>(R.id.overlayTextInput).text.toString(), liveTextSize)
+        }, { xPct, yPct, widthPct ->
+            overlayVideoXPercent = xPct
+            overlayVideoYPercent = yPct
+            overlayVideoWidthPercent = widthPct.coerceIn(5, 90)
+            updateOverlayPreviewLayout()
         })
         placementOverlay.visibility = View.GONE
         playerContainer.addView(placementOverlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -285,17 +321,16 @@ class MainActivity : Activity() {
         selectForDeleteModeButton.setOnClickListener { setStoryboardSelectionMode(false) }
         selectForExportModeButton.setOnClickListener { setStoryboardSelectionMode(true) }
         findViewById<Button>(R.id.exportButton).setOnClickListener {
-            // Fail closed: never interpret an empty storyboard selection as permission to
-            // export the whole video. Full/remaining-video export is allowed only when the
-            // user has actually marked storyboard intervals for deletion; timeline-range
-            // export remains available through its explicit selected range.
+            // Keep the timeline editor independent from the storyboard. Timeline edits have
+            // priority unless the user explicitly entered storyboard export-selection mode.
             when {
+                selectedTimelineRange != null -> exportOnlyTimelineRange(selectedTimelineRange!!)
+                timelineSplitPoints.isNotEmpty() || deletedTimelineRanges.isNotEmpty() -> exportTimelineEditedVideo()
                 selectingForExport -> exportSelectedStoryboardFramesSeparately()
                 selectedFrames.isNotEmpty() -> exportSelectedStoryboardFramesSeparately()
-                selectedTimelineRange != null -> exportRemainingVideo(false)
                 deletedStoryboardFrames.isNotEmpty() -> exportRemainingVideo(false)
                 else -> {
-                    statusText.text = "خروجی انجام نشد؛ ابتدا «انتخاب برای خروجی» را بزنید و اسلایدهای دلخواه را انتخاب کنید، یا یک بازه از نوار زمان انتخاب کنید"
+                    statusText.text = "برای خروجی، یک بازه از نوار زمان انتخاب کنید یا با Cut تقسیم و سپس قطعهٔ ناخواسته را حذف کنید؛ خروجی استوری‌بورد جداست."
                     Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
                 }
             }
@@ -314,8 +349,17 @@ class MainActivity : Activity() {
         videoView.setOnPreparedListener { mediaPlayer ->
             emptyHint.visibility = View.GONE
             playerColorPreview.visibility = View.GONE
+            // Match the visible preview area to the source video's aspect ratio and center it.
+            // Placement and crop overlays use the exact same bounds, so preview percentages
+            // correspond to the actual encoded frame instead of the surrounding black area.
+            playerContainer.post {
+                updatePlayerViewport(mediaPlayer.videoWidth, mediaPlayer.videoHeight)
+            }
             statusText.text = "ویدیو آمادهٔ پخش است"
-            mediaPlayer.setOnVideoSizeChangedListener { _, _, _ -> controller.setAnchorView(videoView) }
+            mediaPlayer.setOnVideoSizeChangedListener { _, width, height ->
+                controller.setAnchorView(videoView)
+                playerContainer.post { updatePlayerViewport(width, height) }
+            }
         }
         videoView.setOnCompletionListener { statusText.text = "پخش تمام شد" }
         videoView.setOnErrorListener { _, what, extra ->
@@ -553,7 +597,8 @@ class MainActivity : Activity() {
             }
             overlayVideoUri = uri
             findViewById<Button>(R.id.pickOverlayVideoButton).text = "ویدیوی رویی ✓"
-            statusText.text = "ویدیوی رویی بارگذاری شد؛ «جای ویدیوی رویی» را بزنید و روی پلیر محل آن را تنظیم کنید"
+            showOverlayVideoPreview(uri)
+            statusText.text = "ویدیوی رویی انتخاب شد و پیش‌نمایش آن روی پلیر فعال شد؛ برای جابه‌جایی «جای ویدیوی رویی» را بزنید"
         } else if (requestCode == PICK_REFERENCE_IMAGE) {
             referenceImageUri = data.data ?: return
             if (selectedUri == null || videoDurationMs <= 0L) {
@@ -1516,6 +1561,97 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun showOverlayVideoPreview(uri: Uri) {
+        releaseOverlayPreviewPlayer()
+        overlayVideoLayer.visibility = View.VISIBLE
+        overlayPreviewTexture.visibility = View.VISIBLE
+        try {
+            contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(this, uri)
+                    overlayPreviewVideoWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()?.coerceAtLeast(1) ?: 16
+                    overlayPreviewVideoHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()?.coerceAtLeast(1) ?: 9
+                } finally { retriever.release() }
+            }
+            updateOverlayPreviewLayout()
+            if (overlayPreviewTexture.isAvailable) startOverlayPreviewOnSurface(overlayPreviewTexture.surfaceTexture)
+        } catch (e: Exception) {
+            overlayVideoLayer.visibility = View.GONE
+            statusText.text = "پیش‌نمایش ویدیوی رویی باز نشد: ${e.message ?: "قالب یا دسترسی فایل پشتیبانی نمی‌شود"}"
+            Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun startOverlayPreviewOnSurface(surfaceTexture: SurfaceTexture) {
+        val uri = overlayVideoUri ?: return
+        releaseOverlayPreviewPlayer()
+        try {
+            val player = MediaPlayer()
+            overlayPreviewSurface = Surface(surfaceTexture)
+            player.setSurface(overlayPreviewSurface)
+            player.setDataSource(this, uri)
+            player.isLooping = true
+            player.setVolume(0f, 0f) // Preview is muted; the final output controls the actual soundtrack.
+            player.setOnPreparedListener { mp ->
+                overlayPreviewVideoWidth = mp.videoWidth.coerceAtLeast(1)
+                overlayPreviewVideoHeight = mp.videoHeight.coerceAtLeast(1)
+                updateOverlayPreviewLayout()
+                try { mp.start() } catch (_: Exception) { }
+            }
+            player.setOnErrorListener { _, what, extra ->
+                runOnUiThread {
+                    statusText.text = "انتخاب شد، اما این ویدیو در پیش‌نمایش پخش نشد ($what/$extra)؛ خروجی را می‌توان جداگانه امتحان کرد"
+                }
+                true
+            }
+            overlayPreviewPlayer = player
+            player.prepareAsync()
+        } catch (e: Exception) {
+            releaseOverlayPreviewPlayer()
+            statusText.text = "پخش پیش‌نمایش ویدیوی رویی ناموفق بود: ${e.message ?: "قالب ویدیو پشتیبانی نمی‌شود"}"
+        }
+    }
+
+    private fun updateOverlayPreviewLayout() {
+        if (!::overlayVideoLayer.isInitialized || !::overlayPreviewTexture.isInitialized) return
+        val layerWidth = overlayVideoLayer.width
+        val layerHeight = overlayVideoLayer.height
+        if (layerWidth <= 0 || layerHeight <= 0) {
+            overlayVideoLayer.post { updateOverlayPreviewLayout() }
+            return
+        }
+        val widthPct = overlayVideoWidthPercent.coerceIn(5, 90)
+        val x = overlayVideoXPercent.coerceIn(0, 100 - widthPct)
+        val y = overlayVideoYPercent.coerceIn(0, 95)
+        val w = (layerWidth * widthPct / 100f).toInt().coerceAtLeast(1)
+        val aspect = overlayPreviewVideoWidth.toFloat() / overlayPreviewVideoHeight.coerceAtLeast(1)
+        val h = (w / aspect).toInt().coerceIn(1, layerHeight)
+        val left = (layerWidth * x / 100f).toInt().coerceAtMost((layerWidth - w).coerceAtLeast(0))
+        val top = (layerHeight * y / 100f).toInt().coerceAtMost((layerHeight - h).coerceAtLeast(0))
+        val lp = overlayPreviewTexture.layoutParams as FrameLayout.LayoutParams
+        lp.width = w
+        lp.height = h
+        lp.gravity = Gravity.TOP or Gravity.START
+        lp.leftMargin = left
+        lp.topMargin = top
+        overlayPreviewTexture.layoutParams = lp
+        // Keep the draggable selection frame aligned with the actual preview rectangle.
+        val aspectForFrame = overlayPreviewVideoWidth.toFloat() / overlayPreviewVideoHeight.coerceAtLeast(1)
+        val frameHeightPct = (widthPct * layerWidth.toFloat() / layerHeight.toFloat() / aspectForFrame * 100f).toInt().coerceIn(5, 95)
+        if (::placementOverlay.isInitialized && placementMode == PlacementOverlayView.Mode.VIDEO) {
+            placementOverlay.setSelection(x, y, widthPct, frameHeightPct)
+        }
+    }
+
+    private fun releaseOverlayPreviewPlayer() {
+        try { overlayPreviewPlayer?.setOnPreparedListener(null); overlayPreviewPlayer?.setOnErrorListener(null); overlayPreviewPlayer?.stop() } catch (_: Exception) { }
+        try { overlayPreviewPlayer?.release() } catch (_: Exception) { }
+        overlayPreviewPlayer = null
+        try { overlayPreviewSurface?.release() } catch (_: Exception) { }
+        overlayPreviewSurface = null
+    }
+
     private fun chooseOverlayVideo() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -1559,9 +1695,9 @@ class MainActivity : Activity() {
         }
         val fullDurationText = text.isNotEmpty() && textStartMs == 0L &&
             (videoDurationMs <= 0L || (textEndMs ?: 0L) >= videoDurationMs)
-        val videoX = number(R.id.overlayVideoXInput, 70)
-        val videoY = number(R.id.overlayVideoYInput, 5)
-        val videoWidth = number(R.id.overlayVideoWidthInput, 25, 5, 90)
+        val videoWidth = overlayVideoWidthPercent.coerceIn(5, 90)
+        val videoX = overlayVideoXPercent.coerceIn(0, 100 - videoWidth)
+        val videoY = overlayVideoYPercent.coerceIn(0, 95)
         if (videoX + videoWidth > 100 || videoY >= 100) {
             Toast.makeText(this, "جایگاه یا عرض ویدیوی رویی نامعتبر است", Toast.LENGTH_LONG).show()
             return
@@ -1613,8 +1749,8 @@ class MainActivity : Activity() {
                     graph.add("[$current]$draw[evc_text_out]")
                     current = "evc_text_out"
                 }
-                // Keep the text/overlay export within the memory limits of older 32-bit ARM phones.
-                // FFmpeg's default filter and x264 look-ahead threads can otherwise trigger a process kill.
+                // Keep text/overlay encoding conservative on 32-bit ARM devices: one filter thread,
+                // one encoder thread, no look-ahead/MB-tree, and a single reference frame.
                 val args = mutableListOf(
                     "-y",
                     "-filter_threads", "1",
@@ -1645,7 +1781,7 @@ class MainActivity : Activity() {
                     "-preset", "ultrafast",
                     "-tune", "fastdecode",
                     "-threads", "1",
-                    "-x264-params", "threads=1:lookahead_threads=1:sync-lookahead=0:rc-lookahead=0",
+                    "-x264-params", "threads=1:sliced-threads=1:lookahead_threads=1:sync-lookahead=0:rc-lookahead=0:mbtree=0:ref=1:bframes=0:me=dia:subme=0:partitions=none:8x8dct=0:weightp=0:aq-mode=0",
                     "-crf", "20",
                     "-pix_fmt", "yuv420p"
                 ))
@@ -1734,7 +1870,7 @@ class MainActivity : Activity() {
         val h: Int
         when (mode) {
             PlacementOverlayView.Mode.TEXT -> { x = textXPercent; y = textYPercent; w = 40; h = 20 }
-            PlacementOverlayView.Mode.VIDEO -> { x = readPercent(R.id.overlayVideoXInput, 70); y = readPercent(R.id.overlayVideoYInput, 5); w = readPercent(R.id.overlayVideoWidthInput, 25).coerceIn(5, 90); h = (w * 9 / 16).coerceAtLeast(8) }
+            PlacementOverlayView.Mode.VIDEO -> { x = overlayVideoXPercent; y = overlayVideoYPercent; w = overlayVideoWidthPercent.coerceIn(5, 90); h = (w * 9 / 16).coerceAtLeast(8) }
             else -> { placementOverlay.visibility = View.GONE; return }
         }
         placementOverlay.setMode(mode)
@@ -1745,9 +1881,13 @@ class MainActivity : Activity() {
         }
         placementOverlay.visibility = View.VISIBLE
         placementOverlay.bringToFront()
+        if (mode == PlacementOverlayView.Mode.VIDEO) {
+            overlayVideoLayer.visibility = View.VISIBLE
+            updateOverlayPreviewLayout()
+        }
         statusText.text = when (mode) {
             PlacementOverlayView.Mode.TEXT -> "جای متن را روی پلیر لمس کن و بکش؛ محل متن خودکار ثبت می‌شود"
-            PlacementOverlayView.Mode.VIDEO -> "ویدیوی رویی را روی پلیر بکش؛ مختصات خودکار ثبت می‌شوند"
+            PlacementOverlayView.Mode.VIDEO -> "پیش‌نمایش واقعی ویدیوی رویی روی پلیر نمایش داده می‌شود؛ برای جابه‌جایی کادر را بکش و برای تغییر اندازه گوشه‌ها را بکش"
             else -> ""
         }
     }
@@ -2189,6 +2329,81 @@ class MainActivity : Activity() {
         } catch (_: Exception) { /* Report failure must not invalidate a successfully exported video. */ }
     }
 
+    /** Exports the timeline edit (cut points + deleted ranges) as one continuous video.
+     *  This path is intentionally independent of storyboard frame selection.
+     */
+    private fun exportTimelineEditedVideo() {
+        val source = selectedUri
+        if (source == null || videoDurationMs <= 0L) {
+            Toast.makeText(this, "ابتدا یک ویدیوی معتبر انتخاب کنید", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val deleted = synchronized(deletedTimelineRanges) { deletedTimelineRanges.toList() }
+            .map { it.first.coerceIn(0L, videoDurationMs) to it.second.coerceIn(0L, videoDurationMs) }
+            .filter { it.second > it.first }
+            .sortedBy { it.first }
+        val mergedDeleted = deleted.fold(mutableListOf<Pair<Long, Long>>()) { acc, range ->
+            if (acc.isNotEmpty() && range.first <= acc.last().second) {
+                val previous = acc.removeAt(acc.lastIndex)
+                acc.add(previous.first to max(previous.second, range.second))
+            } else acc.add(range)
+            acc
+        }
+        val keptRanges = mutableListOf<Pair<Long, Long>>()
+        var cursor = 0L
+        for (range in mergedDeleted) {
+            if (range.first > cursor) keptRanges.add(cursor to range.first)
+            cursor = max(cursor, range.second)
+        }
+        if (cursor < videoDurationMs) keptRanges.add(cursor to videoDurationMs)
+        if (keptRanges.isEmpty()) {
+            Toast.makeText(this, "تمام بخش‌های نوار زمان حذف شده‌اند؛ چیزی برای خروجی باقی نمانده است", Toast.LENGTH_LONG).show()
+            return
+        }
+        val button = findViewById<Button>(R.id.exportButton)
+        button.isEnabled = false
+        statusText.text = "در حال ساخت یک خروجی از بخش‌های باقی‌ماندهٔ نوار زمان، بدون رمزگذاری مجدد…"
+        worker.execute {
+            var result: File? = null
+            var error: String? = null
+            try { result = muxRemainingRanges(source, keptRanges) }
+            catch (e: Exception) { error = e.message ?: e.javaClass.simpleName }
+            mainHandler.post {
+                button.isEnabled = true
+                val file = result
+                if (file == null || !file.exists() || file.length() == 0L) {
+                    statusText.text = "خروجی ویرایش نوار زمان ناموفق بود: ${error ?: "خطای ناشناخته"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                    file?.delete()
+                    return@post
+                }
+                try {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Video.Media.DISPLAY_NAME, "EVC_timeline_edited_${System.currentTimeMillis()}.${outputExtension()}")
+                        put(MediaStore.Video.Media.MIME_TYPE, outputMimeType())
+                        if (android.os.Build.VERSION.SDK_INT >= 29) {
+                            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EVC")
+                            put(MediaStore.Video.Media.IS_PENDING, 1)
+                        }
+                    }
+                    val outUri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IllegalStateException("ساخت فایل خروجی ممکن نشد")
+                    contentResolver.openOutputStream(outUri)?.use { out -> FileInputStream(file).use { it.copyTo(out) } }
+                        ?: throw IllegalStateException("نوشتن فایل خروجی ناموفق بود")
+                    if (android.os.Build.VERSION.SDK_INT >= 29) contentResolver.update(outUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+                    writeOutputInfoReport(outUri)
+                    file.delete()
+                    statusText.text = "خروجی نوار زمان در Movies/EVC ذخیره شد؛ بخش‌های حذف‌شده کنار گذاشته شدند و استوری‌بورد دخالتی نداشت."
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    file.delete()
+                    statusText.text = "ذخیرهٔ خروجی ناموفق بود: ${e.message ?: "خطا"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
     private fun exportTimelineSegmentsSeparately() {
         val source = selectedUri
         if (source == null || videoDurationMs <= 0L) {
@@ -2249,6 +2464,27 @@ class MainActivity : Activity() {
                 Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    /** Keep the actual video, crop handles, and placement overlay aligned to the source frame. */
+    private fun updatePlayerViewport(videoWidth: Int, videoHeight: Int) {
+        if (videoWidth <= 0 || videoHeight <= 0) return
+        val container = findViewById<FrameLayout>(R.id.playerContainer)
+        val availableWidth = (container.width - container.paddingLeft - container.paddingRight).coerceAtLeast(1)
+        val maxHeight = (180f * resources.displayMetrics.density).toInt().coerceAtLeast(1)
+        val aspect = videoWidth.toFloat() / videoHeight.toFloat()
+        var viewportWidth = availableWidth
+        var viewportHeight = (viewportWidth / aspect).toInt().coerceAtLeast(1)
+        if (viewportHeight > maxHeight) {
+            viewportHeight = maxHeight
+            viewportWidth = (viewportHeight * aspect).toInt().coerceAtLeast(1)
+        }
+        videoView.layoutParams = FrameLayout.LayoutParams(viewportWidth, viewportHeight, android.view.Gravity.CENTER)
+        cropOverlay.layoutParams = FrameLayout.LayoutParams(viewportWidth, viewportHeight, android.view.Gravity.CENTER)
+        placementOverlay.layoutParams = FrameLayout.LayoutParams(viewportWidth, viewportHeight, android.view.Gravity.CENTER)
+        overlayVideoLayer.layoutParams = FrameLayout.LayoutParams(viewportWidth, viewportHeight, android.view.Gravity.CENTER)
+        findViewById<ImageView>(R.id.playerColorPreview).layoutParams = FrameLayout.LayoutParams(viewportWidth, viewportHeight, android.view.Gravity.CENTER)
+        updateOverlayPreviewLayout()
     }
 
     /** Free Crop: drag the four corner handles directly over the player preview. */
@@ -2336,6 +2572,8 @@ class MainActivity : Activity() {
             val x = event.x.coerceIn(0f, width.toFloat()); val y = event.y.coerceIn(0f, height.toFloat())
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    // Lock the outer ScrollView for the complete crop gesture.
+                    parent?.requestDisallowInterceptTouchEvent(true)
                     val corners = arrayOf(left * width to top * height, right * width to top * height, left * width to bottom * height, right * width to bottom * height)
                     activeCorner = corners.indices.minByOrNull { i ->
                         val dx = corners[i].first - x; val dy = corners[i].second - y; dx * dx + dy * dy
@@ -2354,7 +2592,12 @@ class MainActivity : Activity() {
                     }
                     invalidate(); return true
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { activeCorner = -1; performClick(); return true }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    activeCorner = -1
+                    parent?.requestDisallowInterceptTouchEvent(false)
+                    performClick()
+                    return true
+                }
             }
             return true
         }
@@ -2895,6 +3138,7 @@ class MainActivity : Activity() {
     }
     override fun onDestroy() {
         storyboardGeneration++
+        releaseOverlayPreviewPlayer()
         worker.shutdownNow()
         frameBitmaps.values.forEach { if (!it.isRecycled) it.recycle() }
         super.onDestroy()
