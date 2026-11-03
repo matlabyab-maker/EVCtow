@@ -1,3 +1,26 @@
+## Version 0.2.115 — Uniform button heights
+
+- Set the height of every button in the main layout to 46dp, matching the full-width yellow color-apply button.
+- Changed only button heights; widths, colors, labels, margins, and behavior are unchanged.
+
+## Version 0.2.114 — All storyboard slides visible in a fixed grid
+
+- Replaced horizontally scrolling storyboard strips with a fixed wrapping grid containing all 120 frame slots.
+- Removed per-row labels and horizontal scrolling so no storyboard frames are hidden off-screen to the side.
+- Preserved frame IDs and existing selection/deletion behavior.
+
+## Version 0.2.114 — Wider and taller red close button
+
+- Moved Cut, Delete Selected Segment, and Restore Segments directly below the timeline bar so the controls sit beside the timeline they operate on.
+- Preserved the existing timeline-control IDs and behavior.
+
+## Version 0.2.111 — Remove text placement button and clarify final export
+
+- Removed the unnecessary “جای متن” button and its click handler. Text positioning remains direct on the player by dragging the live preview; pinch gestures still resize it.
+- Made the dedicated text/video overlay export button full-width and renamed it to “ساخت ویدیوی نهایی با متن / ویدیوی رویی”.
+- Added an explicit note distinguishing this final-video export from “ساخت خروجی ترک‌ها”, which is for external audio/subtitle tracks.
+- VersionCode 313. The red × button is now 50dp wide (double its previous 25dp) and 40dp high (previously 34dp). XML and ZIP checks are performed for this package; Android build/device testing has not been performed in this environment.
+
 ## Version 0.2.110 — Overlay controls consolidated and video selection hardened
 
 - Moved “Place overlay video” and “Place text” into the same compact row as “Build track output”; removed their separate placement row and extra help line.
@@ -25,7 +48,7 @@
 
 # EVCtow — Android video editor
 
-**Project version:** 0.2.110  
+**Project version:** 0.2.115  
 **Android minimum SDK:** 24 (Android 7.0)  
 **Build:** GitHub Actions / Gradle 8.9 / JDK 17
 
@@ -46,7 +69,7 @@ It is configured to run on:
 - pull requests targeting any branch;
 - manual launch through **Actions → EVCtow Android Build → Run workflow**.
 
-On success, the workflow uploads an artifact named `EVCtow-0.2.110-ARM32-TextVideoAudio-Controls-debug-apk` containing the debug APK.
+On success, the workflow uploads an artifact named `EVCtow-0.2.115-ARM32-TextVideoAudio-Controls-debug-apk` containing the debug APK.
 
 ## Uploading to a new repository
 

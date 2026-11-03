@@ -32,6 +32,7 @@ import android.graphics.RectF
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.GridLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -163,12 +164,6 @@ class MainActivity : Activity() {
                 Toast.makeText(this, "ابتدا در بخش متن/ویدیوی رویی، «انتخاب ویدیوی رویی» را بزنید", Toast.LENGTH_LONG).show()
                 findViewById<Button>(R.id.pickOverlayVideoButton).performClick()
             } else activatePlacementMode(PlacementOverlayView.Mode.VIDEO)
-        }
-        findViewById<Button>(R.id.placeTextOnPlayerButton).setOnClickListener {
-            if (findViewById<EditText>(R.id.overlayTextInput).text.isNullOrBlank()) {
-                findViewById<EditText>(R.id.overlayTextInput).requestFocus()
-                Toast.makeText(this, "ابتدا متن را بنویسید؛ سپس جای آن را روی پلیر تنظیم کنید", Toast.LENGTH_LONG).show()
-            } else activatePlacementMode(PlacementOverlayView.Mode.TEXT)
         }
         findViewById<Button>(R.id.hidePlacementOverlayButton).setOnClickListener { placementMode = PlacementOverlayView.Mode.NONE; placementOverlay.visibility = View.GONE }
         freeCropControls = findViewById(R.id.freeCropControls)
@@ -1772,25 +1767,35 @@ class MainActivity : Activity() {
     private fun buildEmptyStoryboard() {
         storyboardRows.removeAllViews()
         frameViews.clear()
-        for (row in 0 until ROWS) {
-            val rowLabel = TextView(this).apply {
-                text = "ردیف ${row + 1} • فریم‌های ${row * FRAMES_PER_ROW + 1} تا ${(row + 1) * FRAMES_PER_ROW}"
-                setTextColor(Color.rgb(185, 215, 255)); textSize = 11f
-                setPadding(dp(2), 0, dp(2), 0)
-            }
-            storyboardRows.addView(rowLabel)
-            val horizontal = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
-            val strip = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            for (col in 0 until FRAMES_PER_ROW) {
-                val index = row * FRAMES_PER_ROW + col
-                if (index in deletedStoryboardFrames) continue
-                val cell = makeFrameCell(index, null, "${index + 1}")
-                strip.addView(cell, LinearLayout.LayoutParams(dp(64), dp(42)).apply { setMargins(0, 0, dp(1), 0) })
-                frameViews[index] = cell
-            }
-            horizontal.addView(strip)
-            storyboardRows.addView(horizontal)
+
+        // Show every storyboard frame in one fixed wrapping grid. No horizontal
+        // per-row scrolling or row rearranging is needed to reach hidden frames.
+        val screenWidthDp = resources.displayMetrics.widthPixels / resources.displayMetrics.density
+        val columns = ((screenWidthDp - 12f) / 68f).toInt().coerceIn(3, 6)
+        val cellWidth = ((screenWidthDp - 12f) / columns).toInt().coerceAtLeast(42)
+        val grid = GridLayout(this).apply {
+            columnCount = columns
+            rowCount = (ROWS * FRAMES_PER_ROW + columns - 1) / columns
+            useDefaultMargins = false
+            alignmentMode = GridLayout.ALIGN_BOUNDS
         }
+        for (index in 0 until ROWS * FRAMES_PER_ROW) {
+            if (index in deletedStoryboardFrames) continue
+            val cell = makeFrameCell(index, null, "${index + 1}")
+            val params = GridLayout.LayoutParams(
+                GridLayout.spec(GridLayout.UNDEFINED, 1f),
+                GridLayout.spec(GridLayout.UNDEFINED, 1f)
+            ).apply {
+                width = dp(cellWidth)
+                height = dp(52)
+                setMargins(dp(1), dp(1), dp(1), dp(1))
+            }
+            grid.addView(cell, params)
+            frameViews[index] = cell
+        }
+        storyboardRows.addView(grid, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
         updateSelectionText()
     }
 
