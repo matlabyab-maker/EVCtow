@@ -1,4 +1,11 @@
-## Version 0.2.115 — Uniform button heights
+## Version 0.2.118 — Wider Crop and Vector buttons
+
+- Increased the Crop and Vector button widths from 58dp to 90dp each. Other button properties are unchanged.
+
+## Version 0.2.118 — Wider Crop and Vector buttons
+
+The “ثبت شروع از پخش” and “ثبت پایان از پخش” controls are now in the same row as Cut, delete selected segment, and restore segments. All five buttons have equal widths and heights.
+
 
 - Set the height of every button in the main layout to 46dp, matching the full-width yellow color-apply button.
 - Changed only button heights; widths, colors, labels, margins, and behavior are unchanged.
@@ -48,7 +55,7 @@
 
 # EVCtow — Android video editor
 
-**Project version:** 0.2.115  
+**Project version:** 0.2.118  
 **Android minimum SDK:** 24 (Android 7.0)  
 **Build:** GitHub Actions / Gradle 8.9 / JDK 17
 
@@ -69,7 +76,7 @@ It is configured to run on:
 - pull requests targeting any branch;
 - manual launch through **Actions → EVCtow Android Build → Run workflow**.
 
-On success, the workflow uploads an artifact named `EVCtow-0.2.115-ARM32-TextVideoAudio-Controls-debug-apk` containing the debug APK.
+On success, the workflow uploads an artifact named `EVCtow-0.2.118-ARM32-TextVideoAudio-Controls-debug-apk` containing the debug APK.
 
 ## Uploading to a new repository
 

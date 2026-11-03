@@ -15,8 +15,8 @@ android {
         ndk {
             abiFilters += listOf("armeabi-v7a")
         }
-        versionCode = 315
-        versionName = "0.2.115"
+        versionCode = 318
+        versionName = "0.2.118"
     }
 
     buildTypes {

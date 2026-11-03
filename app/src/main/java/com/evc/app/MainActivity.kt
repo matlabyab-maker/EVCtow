@@ -1569,15 +1569,13 @@ class MainActivity : Activity() {
         // Keep common MP4 exports on Media3 rather than the FFmpegKit JNI path.
         // Text-only already uses this route; audio replacement now uses a parallel audio
         // sequence, while the source video sequence has its original audio removed.
-        if (secondUri == null && !outputContainerMatroska && (text.isEmpty() || fullDurationText)) {
-            if (audioUri != null) {
-                exportAudioReplacementWithTransformer(sourceUri, audioUri, text, textSize, textX, textY)
-                return
-            }
-            if (text.isNotEmpty()) {
-                exportTextOnlyWithTransformer(sourceUri, text, textSize, textX, textY)
-                return
-            }
+        // Use Media3 Transformer only for audio-only replacement. Text rendering is routed
+        // through the guarded FFmpeg worker below for both full-duration and timed text:
+        // this avoids the device-level native crash observed on some ARM32 phones while
+        // applying Media3 OverlayEffect during export.
+        if (secondUri == null && !outputContainerMatroska && text.isEmpty() && audioUri != null) {
+            exportAudioReplacementWithTransformer(sourceUri, audioUri, text, textSize, textX, textY)
+            return
         }
         val button = findViewById<Button>(R.id.exportOverlayButton)
         button.isEnabled = false
