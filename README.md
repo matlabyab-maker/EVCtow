@@ -1,3 +1,5 @@
+نسخه 0.2.156: پنل متن‌گذاری در شروع بسته است و با دکمهٔ «متن‌گذاری» در نوار عمودی باز/بسته می‌شود. دکمهٔ «پایان متن‌گذاری و بستن پنجره» متن و موقعیت ثبت‌شده را نگه می‌دارد و پنل و ابزار جابه‌جایی متن را می‌بندد. ارتفاع سایر دکمه‌ها تغییر نکرده و دکمه‌های رنگ همچنان 42dp هستند.
+
 نسخه 0.2.151: دو دکمهٔ بخش رنگ به‌صورت اجباری در یک ردیف افقی باقی می‌مانند؛ ارتفاع هر دو به 30dp و متن دکمهٔ دوم به یک خط محدود شد تا فضای عمودی کمتری اشغال شود. شناسه‌ها و عملکرد دکمه‌ها حفظ شده‌اند.
 نسخه 0.2.150: دکمه‌های Auto Color و «ثبت رنگ برای اسلایدهای انتخابی» کوچک‌تر شدند و در یک ردیف افقی کنار هم قرار گرفتند؛ شناسه‌های هر دو دکمه حفظ شده‌اند.
 
@@ -383,3 +385,33 @@ The video-effects panel and its controls (regional blur, noise, sharpening, and 
 ## v0.2.155
 - Minimized the visible vertical gaps between buttons in the left action rail using a small negative bottom margin.
 - Preserved all existing button heights, including the 42dp color controls.
+
+## نسخه 0.2.157
+- پنجرهٔ تنظیم ویدیوی رویی از پنجرهٔ متن‌گذاری جدا شد و در شروع برنامه بسته است.
+- دکمهٔ «ویدیوی رویی» به نوار عمودی ابزارها اضافه شد تا پنجره را باز/بسته کند.
+- دکمهٔ انتخاب ویدیوی رویی و دکمهٔ «پایان تنظیم ویدیوی رویی و بستن پنجره» در پنجرهٔ مستقل قرار گرفتند؛ پایان کار پنجره را می‌بندد و تنظیمات ویدیوی انتخاب‌شده را نگه می‌دارد.
+- ارتفاع سایر دکمه‌ها تغییر نکرده است؛ دو دکمهٔ رنگ همچنان 42dp هستند.
+
+
+## 0.2.158
+- Added a vertical-rail button to open and close the color controls panel on demand. The panel starts hidden; its finish button closes it while preserving current color settings. Existing button heights are unchanged; the two color action buttons remain 42dp.
+
+
+## 0.2.159
+- Added a closed-by-default Tracks panel opened from the vertical action rail. Audio and subtitle selection controls, track timeline, split/delete/reset controls, and a close button are grouped in the panel.
+- Added a video action that opens the existing overlay-video panel. Separate independent video timeline tracks are not supported in this release; the UI states this limitation.
+- No button heights outside newly added controls were reduced. The two color buttons remain 42dp.
+
+
+## نسخه 0.2.160
+- اندازه دکمه‌های Rest در پنجره ویرایش پیشرفته (نور، کنتراست و گاما) دو برابر شد: عرض 96dp و ارتفاع 72dp. سایر ارتفاع دکمه‌ها تغییر نکرد.
+
+
+## نسخهٔ 0.2.161
+- پنجرهٔ ویرایش پیشرفته از AlertDialog تمام‌صفحه‌مانند به پنل شناور غیرمودال تبدیل شد تا هنگام باز بودن آن، کاربر بتواند همچنان اسلایدهای استوری‌بورد و محیط اصلی ویرایش را لمس و پیمایش کند.
+- پنل با دکمهٔ «بستن» بسته می‌شود؛ ارتفاع سایر دکمه‌ها تغییر نکرده و دکمه‌های Rest همان ابعاد نسخهٔ قبل را دارند.
+- بیلد واقعی اندروید در این محیط اجرا نشده است.
+
+
+## نسخهٔ 0.2.162
+- دکمه‌های بازکنندهٔ پنل‌ها با حاشیهٔ دورخطی دوگانه مشخص‌تر شدند؛ اندازه و ارتفاع دکمه‌ها و عملکردشان تغییر نکرده است.

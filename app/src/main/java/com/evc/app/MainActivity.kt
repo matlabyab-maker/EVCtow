@@ -34,6 +34,7 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.RectF
 import android.widget.Button
+import android.widget.PopupWindow
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.GridLayout
@@ -185,6 +186,16 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.globalDeleteButton).setOnClickListener { recordUndoState(); deleteSelectionOrShowOptions() }
         findViewById<Button>(R.id.undoButton).setOnClickListener { undoEditorStep() }
         findViewById<Button>(R.id.redoButton).setOnClickListener { redoEditorStep() }
+        val fixedColorControls = findViewById<View>(R.id.fixedColorControls)
+        fixedColorControls.visibility = View.GONE
+        findViewById<Button>(R.id.colorPanelButton).setOnClickListener {
+            fixedColorControls.visibility = if (fixedColorControls.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            if (fixedColorControls.visibility == View.VISIBLE) statusText.text = "پنجرهٔ رنگ‌آمیزی باز شد؛ پس از تنظیم، دکمهٔ پایان را بزنید"
+        }
+        findViewById<Button>(R.id.finishColorPanelButton).setOnClickListener {
+            fixedColorControls.visibility = View.GONE
+            statusText.text = "تنظیمات رنگ حفظ شد؛ برای ویرایش دوباره دکمهٔ «رنگ‌آمیزی» را بزنید"
+        }
         findViewById<Button>(R.id.autoColorButton).setOnClickListener {
             recordUndoState()
             autoColorEnabled = !autoColorEnabled
@@ -243,7 +254,7 @@ class MainActivity : Activity() {
                 findViewById<Button>(R.id.pickOverlayVideoButton).performClick()
             } else activatePlacementMode(PlacementOverlayView.Mode.VIDEO)
         }
-        findViewById<Button>(R.id.hidePlacementOverlayButton).setOnClickListener { placementMode = PlacementOverlayView.Mode.NONE; placementOverlay.visibility = View.GONE }
+        findViewById<Button>(R.id.hidePlacementOverlayButton).setOnClickListener { placementMode = PlacementOverlayView.Mode.NONE; placementOverlay.visibility = View.GONE; findViewById<View>(R.id.textOverlayPanel).visibility = View.GONE }
         freeCropControls = findViewById(R.id.freeCropControls)
         findViewById<Button>(R.id.cropButton).setOnClickListener { toggleFreeCropMode() }
         findViewById<Button>(R.id.applyFreeCropButton).setOnClickListener {
@@ -336,11 +347,64 @@ class MainActivity : Activity() {
         }
 
         findViewById<Button>(R.id.openButton).setOnClickListener { chooseVideo() }
+        val trackPanel = findViewById<View>(R.id.trackPanel)
+        trackPanel.visibility = View.GONE
+        findViewById<Button>(R.id.trackPanelButton).setOnClickListener {
+            trackPanel.visibility = if (trackPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            if (trackPanel.visibility == View.VISIBLE) statusText.text = "ترک صدا یا زیرنویس اضافه کنید؛ برای ویدیو از انتخاب ویدیوی رویی استفاده می‌شود"
+        }
+        findViewById<Button>(R.id.finishTrackPanelButton).setOnClickListener {
+            trackPanel.visibility = View.GONE
+            statusText.text = "تنظیم ترک‌ها حفظ شد؛ برای ویرایش دوباره دکمهٔ «ترک‌ها» را بزنید"
+        }
         findViewById<Button>(R.id.addAudioButton).setOnClickListener {
             statusText.text = "در حال باز کردن انتخاب‌گر فایل صوتی…"
             chooseExternalAudio()
         }
         findViewById<Button>(R.id.addSubtitleButton).setOnClickListener { chooseExternalSubtitle() }
+        findViewById<Button>(R.id.addVideoTrackButton).setOnClickListener {
+            trackPanel.visibility = View.GONE
+            findViewById<View>(R.id.overlayVideoPanel).visibility = View.VISIBLE
+            statusText.text = "برای افزودن ویدیوی رویی، انتخاب ویدیوی رویی را بزنید؛ این نسخه ویدیوی جداگانه را به‌صورت ترک مستقل تایم‌لاین پشتیبانی نمی‌کند"
+        }
+        val textOverlayPanel = findViewById<View>(R.id.textOverlayPanel)
+        textOverlayPanel.visibility = View.GONE
+        findViewById<Button>(R.id.textPlacementButton).setOnClickListener {
+            textOverlayPanel.visibility = if (textOverlayPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            if (textOverlayPanel.visibility == View.VISIBLE) {
+                val textInput = findViewById<EditText>(R.id.overlayTextInput)
+                textInput.requestFocus()
+                if (textInput.text.isNotBlank() && selectedUri != null) activatePlacementMode(PlacementOverlayView.Mode.TEXT)
+                statusText.text = "متن را وارد کنید؛ برای جابه‌جایی روی پلیر بکشید و در پایان «پایان متن‌گذاری» را بزنید"
+            } else if (placementMode == PlacementOverlayView.Mode.TEXT) {
+                placementMode = PlacementOverlayView.Mode.NONE
+                placementOverlay.visibility = View.GONE
+            }
+        }
+        findViewById<Button>(R.id.finishTextPlacementButton).setOnClickListener {
+            textOverlayPanel.visibility = View.GONE
+            if (placementMode == PlacementOverlayView.Mode.TEXT) {
+                placementMode = PlacementOverlayView.Mode.NONE
+                placementOverlay.visibility = View.GONE
+            }
+            statusText.text = "تنظیم متن ذخیره شد؛ برای ویرایش دوباره دکمهٔ «متن‌گذاری» را بزنید"
+        }
+        val overlayVideoPanel = findViewById<View>(R.id.overlayVideoPanel)
+        overlayVideoPanel.visibility = View.GONE
+        findViewById<Button>(R.id.overlayVideoPanelButton).setOnClickListener {
+            overlayVideoPanel.visibility = if (overlayVideoPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            if (overlayVideoPanel.visibility == View.VISIBLE) {
+                statusText.text = "ویدیوی رویی را انتخاب کنید؛ پس از تنظیم، «پایان تنظیم ویدیوی رویی» را بزنید"
+            }
+        }
+        findViewById<Button>(R.id.finishOverlayVideoButton).setOnClickListener {
+            overlayVideoPanel.visibility = View.GONE
+            if (placementMode == PlacementOverlayView.Mode.VIDEO) {
+                placementMode = PlacementOverlayView.Mode.NONE
+                placementOverlay.visibility = View.GONE
+            }
+            statusText.text = "تنظیم ویدیوی رویی حفظ شد؛ برای تغییر دوباره دکمهٔ «ویدیوی رویی» را بزنید"
+        }
         findViewById<EditText>(R.id.overlayTextInput).addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updateLiveTextPreview() }
@@ -511,16 +575,27 @@ class MainActivity : Activity() {
     }
 
     private fun showAdvancedEditDialog() {
-        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 8, 24, 8) }
+        // A non-modal floating panel lets the user keep interacting with the storyboard/player.
+        val density = resources.displayMetrics.density
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((12 * density).toInt(), (8 * density).toInt(), (12 * density).toInt(), (8 * density).toInt())
+            setBackgroundColor(Color.rgb(11, 27, 56))
+        }
+        val heading = TextView(this).apply {
+            text = "ویرایش پیشرفته"
+            setTextColor(Color.rgb(255, 210, 31))
+            textSize = 16f
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, (6 * density).toInt())
+        }
+        panel.addView(heading)
         fun addControl(label: String, maxValue: Int, initial: Int, onValue: (Int) -> Unit) {
             val valueLabel = TextView(this).apply {
                 text = "$label: ${initial}%"; setTextColor(Color.WHITE); textSize = 13f
             }
             panel.addView(valueLabel)
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             val bar = SeekBar(this).apply {
                 max = maxValue; progress = initial
                 setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -538,24 +613,45 @@ class MainActivity : Activity() {
                 setTextColor(Color.rgb(7, 20, 47)); setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(255, 210, 31)))
                 minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
                 setPadding(6, 0, 6, 0)
-                setOnClickListener {
-                    bar.progress = initial
-                    valueLabel.text = "$label: ${initial}%"
-                    onValue(initial)
-                }
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, 36))
+                setOnClickListener { bar.progress = initial; valueLabel.text = "$label: ${initial}%"; onValue(initial) }
+            }, LinearLayout.LayoutParams((96 * density).toInt(), (72 * density).toInt()))
             panel.addView(row)
         }
         var brightness = 100; var contrast = 100; var gamma = 100
         addControl("نور", 200, 100) { brightness = it }
         addControl("کنتراست", 200, 100) { contrast = it }
         addControl("گاما", 300, 100) { gamma = it }
-        AlertDialog.Builder(this).setTitle("ویرایش پیشرفته")
-            .setView(ScrollView(this).apply { addView(panel) })
-            .setPositiveButton("اعمال", null).setNegativeButton("بستن", null).show()
-            .getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                Toast.makeText(this, "مقادیر نور $brightness٪، کنتراست $contrast٪ و گاما $gamma٪ انتخاب شدند؛ اتصال این تنظیمات به موتور خروجی در نسخهٔ بعدی لازم است.", Toast.LENGTH_LONG).show()
-            }
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        val applyButton = Button(this).apply {
+            text = "اعمال"; textSize = 11f; setTextColor(Color.rgb(7, 20, 47))
+            setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(67, 217, 163)))
+            setOnClickListener { Toast.makeText(this@MainActivity, "مقادیر نور $brightness٪، کنتراست $contrast٪ و گاما $gamma٪ انتخاب شدند؛ اتصال این تنظیمات به موتور خروجی در نسخهٔ بعدی لازم است.", Toast.LENGTH_LONG).show() }
+        }
+        val closeButton = Button(this).apply {
+            text = "بستن"; textSize = 11f; setTextColor(Color.WHITE)
+            setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(65, 91, 130)))
+        }
+        actions.addView(applyButton, LinearLayout.LayoutParams(0, (44 * density).toInt(), 1f).apply { marginEnd = (4 * density).toInt() })
+        actions.addView(closeButton, LinearLayout.LayoutParams(0, (44 * density).toInt(), 1f))
+        panel.addView(actions)
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(panel)
+        }
+        val popup = PopupWindow(scroll, (minOf(340, (resources.displayMetrics.widthPixels / density * 0.82f).toInt()) * density).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT, false).apply {
+            isTouchable = true
+            isFocusable = false
+            isOutsideTouchable = false
+            setBackgroundDrawable(GradientDrawable().apply {
+                setColor(Color.rgb(11, 27, 56))
+                cornerRadius = 12 * density
+                setStroke((1 * density).toInt(), Color.rgb(255, 210, 31))
+            })
+            elevation = 12 * density
+        }
+        closeButton.setOnClickListener { popup.dismiss() }
+        val root = findViewById<View>(R.id.mainRootLayout)
+        popup.showAtLocation(root, Gravity.TOP or Gravity.END, (8 * density).toInt(), (72 * density).toInt())
     }
 
     private fun chooseVideosToAppend() {
@@ -2301,7 +2397,8 @@ class MainActivity : Activity() {
 
     private fun updateLiveTextPreview() {
         val text = findViewById<EditText>(R.id.overlayTextInput).text.toString()
-        if (text.isNotBlank() && selectedUri != null) {
+        val panelOpen = findViewById<View>(R.id.textOverlayPanel).visibility == View.VISIBLE
+        if (text.isNotBlank() && selectedUri != null && panelOpen) {
             placementMode = PlacementOverlayView.Mode.TEXT
             placementOverlay.setMode(PlacementOverlayView.Mode.TEXT)
             placementOverlay.setSelection(textXPercent, textYPercent, 40, 20)
