@@ -15,7 +15,8 @@ class PlacementOverlayView(
     context: Context,
     private val onPositionChanged: (xPercent: Int, yPercent: Int) -> Unit,
     private val onTextSizeChanged: (size: Int) -> Unit = {},
-    private val onVideoBoundsChanged: (xPercent: Int, yPercent: Int, widthPercent: Int) -> Unit = { _, _, _ -> }
+    private val onVideoBoundsChanged: (xPercent: Int, yPercent: Int, widthPercent: Int) -> Unit = { _, _, _ -> },
+    private val onVideoPlacementReleased: () -> Unit = {}
 ) : View(context) {
     enum class Mode { NONE, TEXT, VIDEO }
 
@@ -262,6 +263,7 @@ class PlacementOverlayView(
                 pinchStartDistance = 0f
                 parent?.requestDisallowInterceptTouchEvent(false)
                 performClick()
+                if (mode == Mode.VIDEO && event.actionMasked == MotionEvent.ACTION_UP) onVideoPlacementReleased()
                 return true
             }
         }

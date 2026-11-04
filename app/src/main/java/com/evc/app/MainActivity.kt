@@ -252,15 +252,20 @@ class MainActivity : Activity() {
             overlayVideoYPercent = yPct
             overlayVideoWidthPercent = widthPct.coerceIn(5, 90)
             updateOverlayPreviewLayout()
+        }, {
+            if (placementMode == PlacementOverlayView.Mode.VIDEO && overlayVideoUri != null) {
+                // Touch release commits the live position and immediately proceeds to the unified output action.
+                overlayVideoXPercent = overlayVideoXPercent.coerceIn(0, 100 - overlayVideoWidthPercent.coerceIn(5, 90))
+                overlayVideoYPercent = overlayVideoYPercent.coerceIn(0, 95)
+                placementMode = PlacementOverlayView.Mode.NONE
+                placementOverlay.visibility = View.GONE
+                findViewById<View>(R.id.overlayVideoPanel).visibility = View.GONE
+                statusText.text = "جایگاه و اندازهٔ ویدیوی رویی خودکار ثبت شد؛ در حال رفتن به خروجی تغییرات…"
+                findViewById<Button>(R.id.outputChangesButton).performClick()
+            }
         })
         placementOverlay.visibility = View.GONE
         playerContainer.addView(placementOverlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        findViewById<Button>(R.id.placeVideoOnPlayerButton).setOnClickListener {
-            if (overlayVideoUri == null) {
-                Toast.makeText(this, "ابتدا در بخش متن/ویدیوی رویی، «انتخاب ویدیوی رویی» را بزنید", Toast.LENGTH_LONG).show()
-                findViewById<Button>(R.id.pickOverlayVideoButton).performClick()
-            } else activatePlacementMode(PlacementOverlayView.Mode.VIDEO)
-        }
         findViewById<Button>(R.id.hidePlacementOverlayButton).setOnClickListener { placementMode = PlacementOverlayView.Mode.NONE; placementOverlay.visibility = View.GONE; findViewById<View>(R.id.textOverlayPanel).visibility = View.GONE }
         freeCropControls = findViewById(R.id.freeCropControls)
         findViewById<Button>(R.id.cropButton).setOnClickListener { toggleFreeCropMode() }
@@ -403,14 +408,6 @@ class MainActivity : Activity() {
             if (overlayVideoPanel.visibility == View.VISIBLE) {
                 statusText.text = "ویدیوی رویی را انتخاب کنید؛ پس از تنظیم، «پایان تنظیم ویدیوی رویی» را بزنید"
             }
-        }
-        findViewById<Button>(R.id.finishOverlayVideoButton).setOnClickListener {
-            overlayVideoPanel.visibility = View.GONE
-            if (placementMode == PlacementOverlayView.Mode.VIDEO) {
-                placementMode = PlacementOverlayView.Mode.NONE
-                placementOverlay.visibility = View.GONE
-            }
-            statusText.text = "تنظیم ویدیوی رویی حفظ شد؛ برای تغییر دوباره دکمهٔ «ویدیوی رویی» را بزنید"
         }
         findViewById<EditText>(R.id.overlayTextInput).addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -844,7 +841,8 @@ class MainActivity : Activity() {
             overlayVideoUri = uri
             findViewById<Button>(R.id.pickOverlayVideoButton).text = "ویدیوی رویی ✓"
             showOverlayVideoPreview(uri)
-            statusText.text = "ویدیوی رویی انتخاب شد و پیش‌نمایش آن روی پلیر فعال شد؛ برای جابه‌جایی «جای ویدیوی رویی» را بزنید"
+            statusText.text = "ویدیوی رویی روی پلیر قرار گرفت؛ کادر را بکشید یا گوشه‌ها را تغییر دهید. با برداشتن لمس، تنظیمات ثبت و خروجی تغییرات اجرا می‌شود"
+            activatePlacementMode(PlacementOverlayView.Mode.VIDEO)
         } else if (requestCode == PICK_REFERENCE_IMAGE) {
             referenceImageUri = data.data ?: return
             if (selectedUri == null || videoDurationMs <= 0L) {
@@ -2127,7 +2125,7 @@ class MainActivity : Activity() {
 
     /** Text-only export through Media3 Transformer, avoiding FFmpegKit native execution. */
     @androidx.media3.common.util.UnstableApi
-    private fun exportTextOnlyWithTransformer(sourceUri: Uri, text: String, textSize: Int, textX: Int, textY: Int) {
+    private fun exportTextOnlyWithTransformer(sourceUri: Uri, text: String, textSize: Int, textX: Int, textY: Int, textStartMs: Long, textEndMs: Long, durationMs: Long) {
         val button = findViewById<Button>(R.id.outputChangesButton)
         button.isEnabled = false
         statusText.text = "در حال ساخت خروجی متن با موتور داخلی اندروید…"
@@ -2149,10 +2147,31 @@ class MainActivity : Activity() {
                 .build()
             val textOverlay = TextOverlay.createStaticTextOverlay(styledText, overlaySettings)
             val overlayEffect = OverlayEffect(listOf(textOverlay))
-            val item = EditedMediaItem.Builder(MediaItem.fromUri(sourceUri))
-                .setEffects(Effects(emptyList(), listOf(overlayEffect)))
-                .build()
-            val composition = Composition.Builder(EditedMediaItemSequence.Builder(item).build()).build()
+            // Render the video as adjacent Android Transformer segments. Only the
+            // segment within the selected text time range receives the text effect.
+            val segments = mutableListOf<EditedMediaItem>()
+            fun clippedItem(startMs: Long, endMs: Long, withText: Boolean): EditedMediaItem {
+                val clippedMedia = MediaItem.Builder()
+                    .setUri(sourceUri)
+                    .setClippingConfiguration(
+                        MediaItem.ClippingConfiguration.Builder()
+                            .setStartPositionMs(startMs)
+                            .setEndPositionMs(endMs)
+                            .build()
+                    ).build()
+                val builder = EditedMediaItem.Builder(clippedMedia)
+                if (withText) builder.setEffects(Effects(emptyList(), listOf(overlayEffect)))
+                return builder.build()
+            }
+            val startMs = textStartMs.coerceIn(0L, durationMs)
+            val endMs = textEndMs.coerceIn(startMs, durationMs)
+            if (startMs > 0L) segments.add(clippedItem(0L, startMs, false))
+            if (endMs > startMs) segments.add(clippedItem(startMs, endMs, true))
+            if (endMs < durationMs) segments.add(clippedItem(endMs, durationMs, false))
+            if (segments.isEmpty()) throw IllegalArgumentException("بازه زمانی متن خالی است")
+            val sequenceBuilder = EditedMediaItemSequence.Builder(segments.first())
+            segments.drop(1).forEach { sequenceBuilder.addItem(it) }
+            val composition = Composition.Builder(sequenceBuilder.build()).build()
             val transformer = Transformer.Builder(this).addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                     activeTransformer = null
@@ -2342,13 +2361,16 @@ class MainActivity : Activity() {
             Toast.makeText(this, "جایگاه یا عرض ویدیوی رویی نامعتبر است", Toast.LENGTH_LONG).show()
             return
         }
-        // Keep common MP4 exports on Media3 rather than the FFmpegKit JNI path.
-        // Text-only already uses this route; audio replacement now uses a parallel audio
-        // sequence, while the source video sequence has its original audio removed.
-        // Use Media3 Transformer only for audio-only replacement. Text rendering is routed
-        // through the guarded FFmpeg worker below for both full-duration and timed text:
-        // this avoids the device-level native crash observed on some ARM32 phones while
-        // applying Media3 OverlayEffect during export.
+        // Use Android Media3 Transformer for text-only MP4 output. Split the source
+        // into adjacent clips so the Android text overlay appears only in its time range.
+        if (secondUri == null && !outputContainerMatroska && text.isNotEmpty() &&
+            audioUri == null && videoDurationMs > 0L) {
+            exportTextOnlyWithTransformer(
+                sourceUri, text, textSize, textX, textY,
+                textStartMs ?: 0L, textEndMs ?: videoDurationMs, videoDurationMs
+            )
+            return
+        }
         if (secondUri == null && !outputContainerMatroska && text.isEmpty() && audioUri != null) {
             exportAudioReplacementWithTransformer(sourceUri, audioUri, text, textSize, textX, textY)
             return

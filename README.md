@@ -467,3 +467,17 @@ The video-effects panel and its controls (regional blur, noise, sharpening, and 
 
 ## Version 0.2.171
 - Fixed Kotlin compilation errors in the Split dialog by importing Android `RadioGroup` and `RadioButton` widgets.
+
+
+## 0.2.172
+- Removed the separate overlay-video placement button and finish-placement button.
+- Selecting an overlay video immediately activates its draggable/resizable frame on the player.
+- Releasing touch commits the placement and automatically invokes the unified “خروجی تغییرات” action.
+
+
+## 0.2.174
+- Routed full-duration, text-only MP4 export through Android Media3 Transformer instead of FFmpegKit `drawtext`.
+- Timed text and combined text/video/audio edits retain the existing worker path.
+
+
+Version 0.2.174: text-only MP4 export uses Android Media3 Transformer with adjacent clipped segments, so the text overlay is rendered only between the chosen start and end times.
