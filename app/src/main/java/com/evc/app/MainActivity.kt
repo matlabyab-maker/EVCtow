@@ -744,7 +744,7 @@ class MainActivity : Activity() {
         return 1.0 - diff / pa.size
     }
 
-    /** Replaces the ordinary storyboard grid with image-search matches; no separate results dialog. */
+    /** Replaces the ordinary storyboard grid with image-search matches; cells are laid out in explicit rows. */
     private fun showImageMatches(matches: List<ImageMatch>) {
         if (matches.isEmpty()) return
 
@@ -757,33 +757,28 @@ class MainActivity : Activity() {
         frameViews.clear()
         activeStoryboardFrameCount = matches.size
 
-        val screenWidthDp = resources.displayMetrics.widthPixels / resources.displayMetrics.density
-        val columns = ((screenWidthDp - 12f) / 68f).toInt().coerceIn(3, 6)
-        val cellWidth = ((screenWidthDp - 12f) / columns).toInt().coerceAtLeast(42)
-        val grid = GridLayout(this).apply {
-            columnCount = columns
-            rowCount = (matches.size + columns - 1) / columns
-            useDefaultMargins = false
-            alignmentMode = GridLayout.ALIGN_BOUNDS
-        }
+        val availableWidthDp = (resources.displayMetrics.widthPixels / resources.displayMetrics.density - 86f).coerceAtLeast(180f)
+        val columns = ((availableWidthDp - 8f) / 68f).toInt().coerceIn(2, 6)
         matches.forEachIndexed { index, match ->
             imageSearchFrameTimes[index] = match.timeMs
             frameBitmaps[index] = match.bitmap
-            val cell = makeFrameCell(index, match.bitmap, formatTime(match.timeMs))
-            val params = GridLayout.LayoutParams(
-                GridLayout.spec(GridLayout.UNDEFINED, 1f),
-                GridLayout.spec(GridLayout.UNDEFINED, 1f)
-            ).apply {
-                width = dp(cellWidth)
-                height = dp(64)
-                setMargins(dp(1), dp(1), dp(1), dp(1))
-            }
-            grid.addView(cell, params)
-            frameViews[index] = cell
         }
-        storyboardRows.addView(grid, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ))
+        matches.indices.toList().chunked(columns).forEach { rowIndices ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            }
+            rowIndices.forEach { index ->
+                val match = matches[index]
+                val cell = makeFrameCell(index, match.bitmap, formatTime(match.timeMs))
+                val params = LinearLayout.LayoutParams(0, dp(64), 1f).apply {
+                    setMargins(dp(1), dp(1), dp(1), dp(1))
+                }
+                row.addView(cell, params)
+                frameViews[index] = cell
+            }
+            storyboardRows.addView(row)
+        }
         updateSelectionText()
     }
 
@@ -2364,34 +2359,26 @@ class MainActivity : Activity() {
         frameViews.clear()
         imageSearchFrameTimes.clear()
 
-        // Show every storyboard frame in one fixed wrapping grid. No horizontal
-        // per-row scrolling or row rearranging is needed to reach hidden frames.
-        val screenWidthDp = resources.displayMetrics.widthPixels / resources.displayMetrics.density
-        val columns = ((screenWidthDp - 12f) / 68f).toInt().coerceIn(3, 6)
-        val cellWidth = ((screenWidthDp - 12f) / columns).toInt().coerceAtLeast(42)
-        val grid = GridLayout(this).apply {
-            columnCount = columns
-            rowCount = (activeStoryboardFrameCount + columns - 1) / columns
-            useDefaultMargins = false
-            alignmentMode = GridLayout.ALIGN_BOUNDS
-        }
-        for (index in 0 until activeStoryboardFrameCount) {
-            if (index in deletedStoryboardFrames) continue
-            val cell = makeFrameCell(index, null, "${index + 1}")
-            val params = GridLayout.LayoutParams(
-                GridLayout.spec(GridLayout.UNDEFINED, 1f),
-                GridLayout.spec(GridLayout.UNDEFINED, 1f)
-            ).apply {
-                width = dp(cellWidth)
-                height = dp(52)
-                setMargins(dp(1), dp(1), dp(1), dp(1))
+        // Use explicit horizontal rows. GridLayout weights previously allowed cells to
+        // expand across the entire storyboard width, making only every Nth label visible.
+        val availableWidthDp = (resources.displayMetrics.widthPixels / resources.displayMetrics.density - 86f).coerceAtLeast(180f)
+        val columns = ((availableWidthDp - 8f) / 68f).toInt().coerceIn(2, 6)
+        val visibleIndices = (0 until activeStoryboardFrameCount).filter { it !in deletedStoryboardFrames }
+        visibleIndices.chunked(columns).forEach { rowIndices ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             }
-            grid.addView(cell, params)
-            frameViews[index] = cell
+            rowIndices.forEach { index ->
+                val cell = makeFrameCell(index, null, "${index + 1}")
+                val params = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+                    setMargins(dp(1), dp(1), dp(1), dp(1))
+                }
+                row.addView(cell, params)
+                frameViews[index] = cell
+            }
+            storyboardRows.addView(row)
         }
-        storyboardRows.addView(grid, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ))
         updateSelectionText()
     }
 

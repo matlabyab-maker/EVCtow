@@ -372,3 +372,14 @@ The video-effects panel and its controls (regional blur, noise, sharpening, and 
 - Increased the corner hit target to 46dp so resizing is easier on touch screens.
 - Resizing from any corner now uses a consistent aspect-preserving size calculation, with the opposite corner held in place.
 - No button heights were changed. XML/ZIP checks and source review only; Android build and device testing remain pending.
+
+
+## نسخه 0.2.154
+- اصلاح نمایش اسلایدهای استوری‌بورد: به‌جای GridLayout با وزن‌دهی نادرست، اسلایدها در ردیف‌های افقی صریح و با عرض مساوی چیده می‌شوند؛ دیگر هر اسلاید نباید کل عرض صفحه را بگیرد.
+- همین چیدمان برای نتایج «جست‌وجوی صحنه با عکس» نیز اعمال شد.
+- ارتفاع دکمه‌ها تغییر نکرد؛ دو دکمهٔ رنگ همچنان 42dp هستند.
+
+
+## v0.2.155
+- Minimized the visible vertical gaps between buttons in the left action rail using a small negative bottom margin.
+- Preserved all existing button heights, including the 42dp color controls.
