@@ -3198,6 +3198,7 @@ class MainActivity : Activity() {
                     graph.add("[evc_auto_sky][evc_green][evc_green_mask]maskedmerge[evc_auto_green]")
                     graph.add("[evc_auto_green][evc_skin][evc_skin_mask]maskedmerge[evc_auto]")
                     current = "evc_auto"
+                }
                 val rgb = currentRgbProfile()
                 if (requiresVideoReencode) {
                     graph.add("[$current]colorchannelmixer=rr=${rgb.red}:gg=${rgb.green}:bb=${rgb.blue},eq=saturation=${rgb.saturation}[evc_color]")
