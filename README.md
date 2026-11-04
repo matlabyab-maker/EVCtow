@@ -1,3 +1,10 @@
+نسخه 0.2.151: دو دکمهٔ بخش رنگ به‌صورت اجباری در یک ردیف افقی باقی می‌مانند؛ ارتفاع هر دو به 30dp و متن دکمهٔ دوم به یک خط محدود شد تا فضای عمودی کمتری اشغال شود. شناسه‌ها و عملکرد دکمه‌ها حفظ شده‌اند.
+نسخه 0.2.150: دکمه‌های Auto Color و «ثبت رنگ برای اسلایدهای انتخابی» کوچک‌تر شدند و در یک ردیف افقی کنار هم قرار گرفتند؛ شناسه‌های هر دو دکمه حفظ شده‌اند.
+
+نسخه 0.2.149: دکمهٔ «خروجی تغییرات» به جایگاه دوم نوار عمودی سمت چپ منتقل شد؛ بلافاصله پس از «انتخاب ویدیو». ارتفاع، عرض، رنگ و عملکرد دکمه‌ها تغییر نکردند.
+
+نسخه 0.2.148: ارتفاع دکمه‌های نوار ابزار به اندازهٔ قبلی بازگشت (دکمه‌های معمولی 44dp و خروجی/حذف عمومی 48dp). برای کم‌کردن فاصلهٔ ظاهری بدون تغییر ارتفاع، حاشیه‌های بالا و پایین دکمه‌ها صفر شدند.
+
 نسخه 0.2.146: ظرف نمایشی storyboardRows در activity_main.xml بازیابی شد تا شناسهٔ موردنیاز MainActivity.kt موجود باشد و خطای Unresolved reference در R.id.storyboardRows رفع شود.
 
 نسخه 0.2.145: رنگ دکمه‌های هم‌کارکرد هماهنگ شد و برای تشخیص سریع‌تر از درجات متفاوت همان طیف رنگی استفاده می‌شود؛ دکمه‌های خروجی/فرمت خروجی طلایی، انتخاب زرد، حذف قرمز، افزودن رسانه آبی، ویرایش/برش سبز و Undo/Redo آبی-بنفش هستند.
@@ -347,3 +354,21 @@ The video-effects panel and its controls (regional blur, noise, sharpening, and 
 - MP4 additional-audio-track export, when no subtitle is selected, now uses Android MediaExtractor/MediaMuxer. It retains the source audio/video and adds the selected audio as a separate track without re-encoding the video. Unsupported source tracks or incompatible audio formats report an error rather than being silently discarded.
 - MKV output, subtitle muxing, and combinations that include a second overlay video still use the existing FFmpegKit path.
 - The project source was reviewed for routing and identifiers, but no Android build or device-level audio test has been run; GitHub Actions and device testing are required.
+
+
+### Version 0.2.147
+- Reduced the vertical action-rail button heights to 36dp (38dp for the primary export/delete actions) and removed vertical margins between them to reduce scrolling. Button widths remain 72dp and the rail keeps its independent scroll behavior.
+- XML structure and button IDs were checked; Android build/device testing is still required.
+
+
+### Version 0.2.152
+- Increased the height of the two color-section buttons (`Auto Color` and `applyColorToSelectedButton`) from 30dp to 42dp, keeping them in the same horizontal row.
+- No other button heights were changed. Going forward, do not reduce any button height unless the user explicitly requests it.
+- XML structure and ZIP integrity checked; Android build/device testing remains pending.
+
+
+### Version 0.2.153 — Easier overlay-video placement
+- Added high-contrast visible corner handles and a center move grip to the overlay-video selection frame.
+- Increased the corner hit target to 46dp so resizing is easier on touch screens.
+- Resizing from any corner now uses a consistent aspect-preserving size calculation, with the opposite corner held in place.
+- No button heights were changed. XML/ZIP checks and source review only; Android build and device testing remain pending.

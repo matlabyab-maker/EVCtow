@@ -52,6 +52,22 @@ class PlacementOverlayView(
         strokeWidth = 3f
         strokeJoin = Paint.Join.ROUND
     }
+    // Large, high-contrast handles make the overlay easier to grab on a touch screen.
+    private val handleFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        style = Paint.Style.FILL
+    }
+    private val handleStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFF087F5B.toInt()
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f * resources.displayMetrics.density
+    }
+    private val gripPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f * resources.displayMetrics.density
+        strokeCap = Paint.Cap.ROUND
+    }
 
     fun setSelection(x: Int, y: Int, width: Int, height: Int) {
         widthPercent = width.coerceIn(5, 95)
@@ -109,6 +125,25 @@ class PlacementOverlayView(
         }
         if (label.isNotEmpty()) canvas.drawText(label, left + 5f, min(bottom - 5f, top + 17f), labelPaint)
         canvas.drawRoundRect(RectF(left, top, right, bottom), 7f, 7f, borderPaint)
+        if (mode == Mode.VIDEO) {
+            val density = resources.displayMetrics.density
+            val radius = 9f * density
+            // Four visible corner grips; their touch targets are intentionally larger than their drawing.
+            val corners = arrayOf(
+                left to top, right to top, left to bottom, right to bottom
+            )
+            for ((cx, cy) in corners) {
+                canvas.drawCircle(cx, cy, radius, handleFillPaint)
+                canvas.drawCircle(cx, cy, radius, handleStrokePaint)
+            }
+            // A center grip communicates that the whole box can be dragged to move it.
+            val cx = (left + right) / 2f
+            val cy = (top + bottom) / 2f
+            val gripHalf = 7f * density
+            canvas.drawLine(cx - gripHalf, cy, cx + gripHalf, cy, gripPaint)
+            canvas.drawLine(cx, cy - gripHalf, cx, cy + gripHalf, gripPaint)
+            canvas.drawCircle(cx, cy, 3f * density, handleStrokePaint)
+        }
     }
 
     fun setMode(mode: Mode) { tag = mode; invalidate() }
@@ -145,7 +180,8 @@ class PlacementOverlayView(
                 val top = height * yPercent / 100f
                 val right = min(width.toFloat(), left + width * widthPercent / 100f)
                 val bottom = min(height.toFloat(), top + height * heightPercent / 100f)
-                val handle = 28f * resources.displayMetrics.density
+                // Generous touch target: users do not need to hit the tiny visible circle exactly.
+                val handle = 46f * resources.displayMetrics.density
                 resizingCorner = if (mode == Mode.VIDEO) when {
                     distance(event.x, event.y, left, top) <= handle -> 0
                     distance(event.x, event.y, right, top) <= handle -> 1
@@ -167,24 +203,29 @@ class PlacementOverlayView(
             }
             MotionEvent.ACTION_MOVE -> {
                 if (mode == Mode.VIDEO && resizingCorner >= 0 && event.pointerCount == 1) {
-                    val dxPct = ((event.x - downX) * 100f / width).toInt()
-                    val dyPct = ((event.y - downY) * 100f / height).toInt()
-                    var newW = startWidthPercent
-                    var newH = startHeightPercent
-                    var newX = startLeftPercent
-                    var newY = startTopPercent
-                    when (resizingCorner) {
-                        0 -> { newW = startWidthPercent - dxPct; newH = startHeightPercent - dyPct; newX = startLeftPercent + dxPct; newY = startTopPercent + dyPct }
-                        1 -> { newW = startWidthPercent + dxPct; newH = startHeightPercent - dyPct; newY = startTopPercent + dyPct }
-                        2 -> { newW = startWidthPercent - dxPct; newH = startHeightPercent + dyPct; newX = startLeftPercent + dxPct }
-                        3 -> { newW = startWidthPercent + dxPct; newH = startHeightPercent + dyPct }
-                    }
-                    newW = newW.coerceIn(5, 90)
-                    newH = newH.coerceIn(5, 95)
-                    newX = newX.coerceIn(0, 100 - newW)
-                    newY = newY.coerceIn(0, 100 - newH)
+                    val dxPct = (event.x - downX) * 100f / width
+                    val dyPct = (event.y - downY) * 100f / height
+                    // Width is the saved size control; derive vertical drag from the displayed aspect ratio
+                    // so every corner resizes the actual preview consistently instead of distorting the frame.
+                    val heightPerWidth = (startHeightPercent.toFloat() / startWidthPercent.coerceAtLeast(1)).coerceAtLeast(0.05f)
+                    val widthFromY = dyPct / heightPerWidth
+                    val deltaFromX = if (resizingCorner == 0 || resizingCorner == 2) -dxPct else dxPct
+                    val deltaFromY = if (resizingCorner == 0 || resizingCorner == 1) -widthFromY else widthFromY
+                    val deltaWidth = if (kotlin.math.abs(deltaFromX) >= kotlin.math.abs(deltaFromY)) deltaFromX else deltaFromY
+                    val newW = (startWidthPercent + deltaWidth.toInt()).coerceIn(5, 90)
+                    val widthDelta = newW - startWidthPercent
+                    val heightDelta = (widthDelta * heightPerWidth).toInt()
+                    val newX = when (resizingCorner) {
+                        0, 2 -> startLeftPercent - widthDelta
+                        else -> startLeftPercent
+                    }.coerceIn(0, 100 - newW)
+                    val newY = when (resizingCorner) {
+                        0, 1 -> startTopPercent - heightDelta
+                        else -> startTopPercent
+                    }.coerceIn(0, 95)
                     xPercent = newX; yPercent = newY
-                    widthPercent = newW; heightPercent = newH
+                    widthPercent = newW
+                    heightPercent = (newW * heightPerWidth).toInt().coerceIn(5, 95)
                     invalidate()
                     onVideoBoundsChanged(xPercent, yPercent, widthPercent)
                     return true
