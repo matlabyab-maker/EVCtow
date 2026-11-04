@@ -2171,7 +2171,7 @@ class MainActivity : Activity() {
                     graph.add("[evc_base][evc_small]overlay=x='main_w*$videoX/100':y='main_h*$videoY/100':eof_action=pass[evc_with_video]")
                     current = "evc_with_video"
                 }
-                if (requiresVideoReencode && textFile != null) {
+                if (textFile != null) {
                     val safePath = textFile.absolutePath.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
                     val startSeconds = ((textStartMs ?: 0L).toDouble() / 1000.0).let { String.format(java.util.Locale.US, "%.3f", it) }
                     val endSeconds = ((textEndMs ?: videoDurationMs).toDouble() / 1000.0).let { String.format(java.util.Locale.US, "%.3f", it) }
@@ -3140,6 +3140,9 @@ class MainActivity : Activity() {
             return
         }
 
+        val cropChanged = cropSettingsSaved && (cropLeftPct > 0 || cropTopPct > 0 || cropRightPct > 0 || cropBottomPct > 0)
+        // Keep this decision outside the try block so the completion callback can report it.
+        val requiresVideoReencode = cropChanged || text.isNotEmpty() || secondUri != null || globalColorChanged || autoColorEnabled
         val button = findViewById<Button>(R.id.outputChangesButton)
         button.isEnabled = false
         statusText.text = "در حال ترکیب تغییرات تصویری و ترک‌های پشتیبانی‌شده در یک خروجی…"
@@ -3171,10 +3174,8 @@ class MainActivity : Activity() {
                 val subtitleIndex = if (subtitleFile != null) nextInput++ else null
                 if (subtitleFile != null) args.addAll(listOf("-i", subtitleFile.absolutePath))
 
-                val cropChanged = cropSettingsSaved && (cropLeftPct > 0 || cropTopPct > 0 || cropRightPct > 0 || cropBottomPct > 0)
                 // Audio/subtitle-only exports must not touch the video bitstream. Use FFmpeg
                 // stream copy unless a real visual edit requires filtering/re-encoding.
-                val requiresVideoReencode = cropChanged || text.isNotEmpty() || secondUri != null || globalColorChanged || autoColorEnabled
                 val graph = mutableListOf<String>()
                 var current = "0:v"
                 if (requiresVideoReencode && cropChanged) {
