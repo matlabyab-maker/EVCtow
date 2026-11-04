@@ -463,3 +463,7 @@ The video-effects panel and its controls (regional blur, noise, sharpening, and 
 - در منوی Original Utpot دو گزینهٔ «انتخاب تکه‌های جدا» و «انتخاب تکه‌های چسبیده» اضافه شد.
 - تکه‌های جدا به فایل‌های مستقل و یک بازهٔ چسبیده به یک فایل صادر می‌شود؛ با درخواست کپی مستقیم همهٔ جریان‌های منبع (`-map 0 -c copy`).
 - ورودی زمان به ثانیه یا قالب دقیقه:ثانیه و ساعت:دقیقه:ثانیه پذیرفته می‌شود.
+
+
+## Version 0.2.171
+- Fixed Kotlin compilation errors in the Split dialog by importing Android `RadioGroup` and `RadioButton` widgets.
