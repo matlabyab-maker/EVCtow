@@ -2123,107 +2123,114 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Text-only export through Media3 Transformer, avoiding FFmpegKit native execution. */
-    @androidx.media3.common.util.UnstableApi
+    /** Text-only export using a transparent Android-rendered PNG and FFmpeg overlay. */
     private fun exportTextOnlyWithTransformer(sourceUri: Uri, text: String, textSize: Int, textX: Int, textY: Int, textStartMs: Long, textEndMs: Long, durationMs: Long) {
         val button = findViewById<Button>(R.id.outputChangesButton)
         button.isEnabled = false
-        statusText.text = "در حال ساخت خروجی متن با موتور داخلی اندروید…"
-        val output = File(cacheDir, "evc_text_${System.currentTimeMillis()}.mp4")
-        try {
-            require(durationMs > 0L) { "مدت زمان ویدیو نامعتبر است" }
-            require(text.isNotBlank()) { "متن برای نمایش وارد نشده است" }
-            require(textStartMs >= 0L && textEndMs > textStartMs) {
-                "زمان پایان متن باید بعد از زمان شروع باشد"
-            }
-            val startMs = textStartMs.coerceIn(0L, durationMs)
-            val endMs = textEndMs.coerceIn(0L, durationMs)
-            require(endMs > startMs) { "بازه زمانی متن خارج از محدوده ویدیو است" }
-
-            val styledText = SpannableString(text).apply {
-                if (isNotEmpty()) {
-                    setSpan(ForegroundColorSpan(Color.WHITE), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    setSpan(StyleSpan(Typeface.BOLD), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                }
-            }
-            val anchorX = (-1f + 2f * textX.coerceIn(0, 100) / 100f).coerceIn(-1f, 1f)
-            val anchorY = (1f - 2f * textY.coerceIn(0, 100) / 100f).coerceIn(-1f, 1f)
-            val scale = (textSize / 100f).coerceIn(0.08f, 1.6f)
-            val overlaySettings = StaticOverlaySettings.Builder()
-                .setOverlayFrameAnchor(-1f, 1f)
-                .setBackgroundFrameAnchor(anchorX, anchorY)
-                .setScale(scale, scale)
-                .build()
-            val textOverlay = TextOverlay.createStaticTextOverlay(styledText, overlaySettings)
-            val overlayEffect = OverlayEffect(listOf(textOverlay))
-            // Render the video as adjacent Android Transformer segments. Only the
-            // segment within the selected text time range receives the text effect.
-            val segments = mutableListOf<EditedMediaItem>()
-            fun clippedItem(startMs: Long, endMs: Long, withText: Boolean): EditedMediaItem {
-                val clippedMedia = MediaItem.Builder()
-                    .setUri(sourceUri)
-                    .setClippingConfiguration(
-                        MediaItem.ClippingConfiguration.Builder()
-                            .setStartPositionMs(startMs)
-                            .setEndPositionMs(endMs)
-                            .build()
-                    ).build()
-                val builder = EditedMediaItem.Builder(clippedMedia)
-                if (withText) builder.setEffects(Effects(emptyList(), listOf(overlayEffect)))
-                return builder.build()
-            }
-            if (startMs > 0L) segments.add(clippedItem(0L, startMs, false))
-            if (endMs > startMs) segments.add(clippedItem(startMs, endMs, true))
-            if (endMs < durationMs) segments.add(clippedItem(endMs, durationMs, false))
-            if (segments.isEmpty()) throw IllegalArgumentException("بازه زمانی متن خالی است")
-            val sequenceBuilder = EditedMediaItemSequence.Builder(segments.first())
-            segments.drop(1).forEach { sequenceBuilder.addItem(it) }
-            val composition = Composition.Builder(sequenceBuilder.build()).build()
-            val transformer = Transformer.Builder(this).addListener(object : Transformer.Listener {
-                override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                    activeTransformer = null
-                    try {
-                        val values = ContentValues().apply {
-                            put(MediaStore.Video.Media.DISPLAY_NAME, "EVC_Text_${System.currentTimeMillis()}.mp4")
-                            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                            if (android.os.Build.VERSION.SDK_INT >= 29) {
-                                put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EVC")
-                                put(MediaStore.Video.Media.IS_PENDING, 1)
-                            }
-                        }
-                        val outUri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-                            ?: throw IllegalStateException("ساخت فایل در Movies/EVC ممکن نشد")
-                        contentResolver.openOutputStream(outUri)?.use { stream -> FileInputStream(output).use { it.copyTo(stream) } }
-                            ?: throw IllegalStateException("نوشتن فایل خروجی ناموفق بود")
-                        if (android.os.Build.VERSION.SDK_INT >= 29) {
-                            contentResolver.update(outUri, ContentValues().apply {
-                                put(MediaStore.Video.Media.IS_PENDING, 0)
-                            }, null, null)
-                        }
-                        output.delete()
-                        button.isEnabled = true
-                        statusText.text = "متن روی ویدیو در Movies/EVC ذخیره شد."
-                        Toast.makeText(this@MainActivity, statusText.text, Toast.LENGTH_LONG).show()
-                    } catch (e: Exception) {
-                        output.delete(); button.isEnabled = true
-                        statusText.text = "ذخیرهٔ خروجی متن ناموفق بود: ${e.message ?: "خطا"}"
-                        Toast.makeText(this@MainActivity, statusText.text, Toast.LENGTH_LONG).show()
+        statusText.text = "در حال ساخت خروجی متن در بازهٔ زمانی انتخاب‌شده…"
+        worker.execute {
+            var output: File? = null
+            var overlayPng: File? = null
+            var sourceFile: File? = null
+            var error: String? = null
+            try {
+                val retriever = MediaMetadataRetriever()
+                val width: Int
+                val height: Int
+                try {
+                    retriever.setDataSource(this, sourceUri)
+                    width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()
+                        ?: throw IllegalStateException("عرض ویدیو خوانده نشد")
+                    height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
+                        ?: throw IllegalStateException("ارتفاع ویدیو خوانده نشد")
+                } finally { retriever.release() }
+                require(width > 0 && height > 0) { "ابعاد ویدیو نامعتبر است" }
+                val fontPercent = textSize.coerceIn(8, 160)
+                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                try {
+                    val canvas = Canvas(bitmap)
+                    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = Color.WHITE
+                        style = Paint.Style.FILL
+                        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                        textSize = (height * fontPercent / 100f).coerceIn(16f, height * 0.25f)
+                        textAlign = Paint.Align.CENTER
+                        setShadowLayer(max(2f, height * 0.004f), 1f, 1f, Color.BLACK)
                     }
+                    val lines = text.split('\n')
+                    val lineHeight = paint.fontSpacing
+                    val totalHeight = lineHeight * lines.size
+                    val centerX = width * textX.coerceIn(0, 100) / 100f
+                    val centerY = height * textY.coerceIn(0, 100) / 100f
+                    var baseline = centerY - totalHeight / 2f - paint.ascent()
+                    for (line in lines) {
+                        var shown = line
+                        while (shown.isNotEmpty() && paint.measureText(shown) > width * 0.94f) {
+                            shown = shown.dropLast(1)
+                        }
+                        canvas.drawText(shown, centerX.coerceIn(0f, width.toFloat()), baseline, paint)
+                        baseline += lineHeight
+                    }
+                    overlayPng = File(cacheDir, "evc_text_overlay_${System.currentTimeMillis()}.png")
+                    overlayPng!!.outputStream().use { stream -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream) }
+                } finally { bitmap.recycle() }
+                output = File(cacheDir, "evc_text_${System.currentTimeMillis()}.mp4")
+                val startSec = "%.3f".format(java.util.Locale.US, textStartMs.coerceAtLeast(0L) / 1000.0)
+                val endSec = "%.3f".format(java.util.Locale.US, textEndMs.coerceAtLeast(textStartMs) / 1000.0)
+                val filter = "[0:v][1:v]overlay=0:0:enable='between(t\\,$startSec\\,$endSec)'[v]"
+                val args = arrayListOf(
+                    "-y", "-threads", "1", "-i", (copyUriToCache(sourceUri, "evc_text_source").also { sourceFile = it }).absolutePath,
+                    "-loop", "1", "-i", overlayPng!!.absolutePath,
+                    "-filter_complex", filter, "-map", "[v]", "-map", "0:a?",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-threads", "1", "-crf", "20",
+                    "-pix_fmt", "yuv420p", "-c:a", "copy", "-t", "%.3f".format(java.util.Locale.US, durationMs / 1000.0),
+                    "-movflags", "+faststart", output!!.absolutePath
+                )
+                val session = FFmpegKit.executeWithArguments(args.toTypedArray())
+                if (!ReturnCode.isSuccess(session.returnCode) || !output!!.exists() || output!!.length() == 0L) {
+                    throw IllegalStateException("خروجی متن ساخته نشد: ${session.allLogsAsString.takeLast(1000)}")
                 }
-                override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
-                    activeTransformer = null
-                    output.delete(); button.isEnabled = true
-                    statusText.text = "ساخت خروجی متن ناموفق بود: ${exportException.message ?: "خطای رمزگذاری"}"
-                    Toast.makeText(this@MainActivity, statusText.text, Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                error = e.message ?: e.javaClass.simpleName
+                output?.delete(); output = null
+            } finally {
+                overlayPng?.delete()
+                sourceFile?.delete()
+            }
+            mainHandler.post {
+                button.isEnabled = true
+                val result = output
+                if (result == null || !result.exists() || result.length() == 0L) {
+                    statusText.text = "ساخت خروجی متن ناموفق بود: ${error ?: "خطای ناشناخته"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                    result?.delete()
+                    return@post
                 }
-            }).build()
-            activeTransformer = transformer
-            transformer.start(composition, output.absolutePath)
-        } catch (e: Exception) {
-            activeTransformer = null
-            output.delete(); button.isEnabled = true
-            statusText.text = "شروع خروجی متن ناموفق بود: ${e.message ?: e.javaClass.simpleName}"
-            Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                try {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Video.Media.DISPLAY_NAME, "EVC_Text_${System.currentTimeMillis()}.mp4")
+                        put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                        if (android.os.Build.VERSION.SDK_INT >= 29) {
+                            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EVC")
+                            put(MediaStore.Video.Media.IS_PENDING, 1)
+                        }
+                    }
+                    val outUri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IllegalStateException("ساخت فایل در Movies/EVC ممکن نشد")
+                    contentResolver.openOutputStream(outUri)?.use { stream -> FileInputStream(result).use { it.copyTo(stream) } }
+                        ?: throw IllegalStateException("نوشتن فایل خروجی ناموفق بود")
+                    if (android.os.Build.VERSION.SDK_INT >= 29) {
+                        contentResolver.update(outUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+                    }
+                    result.delete()
+                    statusText.text = "ویدیوی متن‌گذاری‌شده در Movies/EVC ذخیره شد؛ متن فقط در بازهٔ زمانی تعیین‌شده نمایش داده می‌شود."
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    result.delete()
+                    statusText.text = "ذخیرهٔ خروجی متن ناموفق بود: ${e.message ?: "خطا"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
@@ -2372,20 +2379,9 @@ class MainActivity : Activity() {
         // into adjacent clips so the Android text overlay appears only in its time range.
         if (secondUri == null && !outputContainerMatroska && text.isNotEmpty() &&
             audioUri == null && videoDurationMs > 0L) {
-            val requestedTextStartMs = textStartMs
-            val requestedTextEndMs = textEndMs
-            if (requestedTextStartMs == null || requestedTextEndMs == null ||
-                requestedTextStartMs < 0L || requestedTextEndMs <= requestedTextStartMs) {
-                Toast.makeText(
-                    this,
-                    "برای متن، زمان شروع و پایان معتبر تعیین کنید",
-                    Toast.LENGTH_LONG
-                ).show()
-                return
-            }
             exportTextOnlyWithTransformer(
                 sourceUri, text, textSize, textX, textY,
-                requestedTextStartMs, requestedTextEndMs, videoDurationMs
+                textStartMs ?: 0L, textEndMs ?: videoDurationMs, videoDurationMs
             )
             return
         }
