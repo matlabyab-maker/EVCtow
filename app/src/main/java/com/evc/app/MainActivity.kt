@@ -180,6 +180,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        ensureSingleUndoRedoButtons()
         findViewById<Button>(R.id.outputChangesButton).setOnClickListener { exportCombinedChanges() }
         findViewById<Button>(R.id.globalDeleteButton).setOnClickListener { recordUndoState(); deleteSelectionOrShowOptions() }
         findViewById<Button>(R.id.undoButton).setOnClickListener { undoEditorStep() }
@@ -1200,6 +1201,31 @@ class MainActivity : Activity() {
     }
 
     private fun captureEditorHistoryState() = EditorHistoryState(timelineSplitPoints.toList(), deletedTimelineRanges.toList(), trackClips.toList(), frameColorProfiles.toMap(), listOf(cropLeftPct, cropTopPct, cropRightPct, cropBottomPct), cropSettingsSaved, autoColorEnabled, overlayVideoUri, findViewById<EditText>(R.id.overlayTextInput).text.toString(), textXPercent, textYPercent, liveTextSize, overlayVideoXPercent, overlayVideoYPercent, overlayVideoWidthPercent, mergeUris.toList(), vectorUris.toList(), referenceImageUri)
+
+    /** Keep one visible Undo and one visible Redo action, even if a layout revision accidentally duplicates them. */
+    private fun ensureSingleUndoRedoButtons() {
+        val root = findViewById<ViewGroup>(R.id.mainRootLayout)
+        val allButtons = mutableListOf<Button>()
+        fun collect(view: View) {
+            if (view is Button) allButtons.add(view)
+            if (view is ViewGroup) {
+                for (i in 0 until view.childCount) collect(view.getChildAt(i))
+            }
+        }
+        collect(root)
+
+        fun keepOne(targetId: Int, word: String, arrow: String) {
+            val candidates = allButtons.filter { button ->
+                button.id == targetId || button.text.toString().contains(word, ignoreCase = true) || button.text.toString().contains(arrow)
+            }
+            val keeper = candidates.firstOrNull { it.id == targetId } ?: candidates.firstOrNull()
+            candidates.forEach { button ->
+                if (button !== keeper) (button.parent as? ViewGroup)?.removeView(button)
+            }
+        }
+        keepOne(R.id.undoButton, "undo", "↶")
+        keepOne(R.id.redoButton, "redo", "↷")
+    }
 
     private fun recordUndoState() {
         if (restoringHistory) return
