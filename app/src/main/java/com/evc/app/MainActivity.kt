@@ -2153,7 +2153,7 @@ class MainActivity : Activity() {
                         color = Color.WHITE
                         style = Paint.Style.FILL
                         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-                        textSize = (height * fontPercent / 100f).coerceIn(16f, height * 0.25f)
+                        setTextSize((height * fontPercent / 100f).coerceIn(16f, height * 0.25f))
                         textAlign = Paint.Align.CENTER
                         setShadowLayer(max(2f, height * 0.004f), 1f, 1f, Color.BLACK)
                     }
