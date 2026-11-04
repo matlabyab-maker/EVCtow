@@ -2131,6 +2131,15 @@ class MainActivity : Activity() {
         statusText.text = "در حال ساخت خروجی متن با موتور داخلی اندروید…"
         val output = File(cacheDir, "evc_text_${System.currentTimeMillis()}.mp4")
         try {
+            require(durationMs > 0L) { "مدت زمان ویدیو نامعتبر است" }
+            require(text.isNotBlank()) { "متن برای نمایش وارد نشده است" }
+            require(textStartMs >= 0L && textEndMs > textStartMs) {
+                "زمان پایان متن باید بعد از زمان شروع باشد"
+            }
+            val startMs = textStartMs.coerceIn(0L, durationMs)
+            val endMs = textEndMs.coerceIn(0L, durationMs)
+            require(endMs > startMs) { "بازه زمانی متن خارج از محدوده ویدیو است" }
+
             val styledText = SpannableString(text).apply {
                 if (isNotEmpty()) {
                     setSpan(ForegroundColorSpan(Color.WHITE), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -2163,8 +2172,6 @@ class MainActivity : Activity() {
                 if (withText) builder.setEffects(Effects(emptyList(), listOf(overlayEffect)))
                 return builder.build()
             }
-            val startMs = textStartMs.coerceIn(0L, durationMs)
-            val endMs = textEndMs.coerceIn(startMs, durationMs)
             if (startMs > 0L) segments.add(clippedItem(0L, startMs, false))
             if (endMs > startMs) segments.add(clippedItem(startMs, endMs, true))
             if (endMs < durationMs) segments.add(clippedItem(endMs, durationMs, false))
@@ -2365,9 +2372,20 @@ class MainActivity : Activity() {
         // into adjacent clips so the Android text overlay appears only in its time range.
         if (secondUri == null && !outputContainerMatroska && text.isNotEmpty() &&
             audioUri == null && videoDurationMs > 0L) {
+            val requestedTextStartMs = textStartMs
+            val requestedTextEndMs = textEndMs
+            if (requestedTextStartMs == null || requestedTextEndMs == null ||
+                requestedTextStartMs < 0L || requestedTextEndMs <= requestedTextStartMs) {
+                Toast.makeText(
+                    this,
+                    "برای متن، زمان شروع و پایان معتبر تعیین کنید",
+                    Toast.LENGTH_LONG
+                ).show()
+                return
+            }
             exportTextOnlyWithTransformer(
                 sourceUri, text, textSize, textX, textY,
-                textStartMs ?: 0L, textEndMs ?: videoDurationMs, videoDurationMs
+                requestedTextStartMs, requestedTextEndMs, videoDurationMs
             )
             return
         }

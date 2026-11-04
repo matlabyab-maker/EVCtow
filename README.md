@@ -475,9 +475,9 @@ The video-effects panel and its controls (regional blur, noise, sharpening, and 
 - Releasing touch commits the placement and automatically invokes the unified “خروجی تغییرات” action.
 
 
-## 0.2.174
+## 0.2.175
 - Routed full-duration, text-only MP4 export through Android Media3 Transformer instead of FFmpegKit `drawtext`.
 - Timed text and combined text/video/audio edits retain the existing worker path.
 
 
-Version 0.2.174: text-only MP4 export uses Android Media3 Transformer with adjacent clipped segments, so the text overlay is rendered only between the chosen start and end times.
+Version 0.2.175: text-only MP4 export now requires explicit valid start/end times and rejects missing or invalid time ranges instead of silently showing text for the entire video.
