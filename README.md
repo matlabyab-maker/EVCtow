@@ -1,3 +1,5 @@
+نسخه 0.2.170: دکمه‌های مستقل «خروجی تغییرات» و «Original Utpot» از ردیف افقی خارج و به‌صورت عمودی در نوار ابزار قرار گرفتند. دو دکمهٔ «انتخاب تکه‌های جدا» و «انتخاب تکه‌های چسبیده» نیز به بالای نوار عمودی اضافه شدند و مستقیماً پنجرهٔ انتخاب بازهٔ خروجی بدون رمزگذاری مجدد را باز می‌کنند. ارتفاع دکمه‌های خروجی 48dp و دکمه‌های معمولی 44dp حفظ شده است.
+
 نسخه 0.2.156: پنل متن‌گذاری در شروع بسته است و با دکمهٔ «متن‌گذاری» در نوار عمودی باز/بسته می‌شود. دکمهٔ «پایان متن‌گذاری و بستن پنجره» متن و موقعیت ثبت‌شده را نگه می‌دارد و پنل و ابزار جابه‌جایی متن را می‌بندد. ارتفاع سایر دکمه‌ها تغییر نکرده و دکمه‌های رنگ همچنان 42dp هستند.
 
 نسخه 0.2.151: دو دکمهٔ بخش رنگ به‌صورت اجباری در یک ردیف افقی باقی می‌مانند؛ ارتفاع هر دو به 30dp و متن دکمهٔ دوم به یک خط محدود شد تا فضای عمودی کمتری اشغال شود. شناسه‌ها و عملکرد دکمه‌ها حفظ شده‌اند.
@@ -415,3 +417,49 @@ The video-effects panel and its controls (regional blur, noise, sharpening, and 
 
 ## نسخهٔ 0.2.162
 - دکمه‌های بازکنندهٔ پنل‌ها با حاشیهٔ دورخطی دوگانه مشخص‌تر شدند؛ اندازه و ارتفاع دکمه‌ها و عملکردشان تغییر نکرده است.
+
+
+## نسخهٔ 0.2.163
+- دکمهٔ «اعمال زمان» به ابتدای نوار عمودی ابزارها منتقل شد و بلافاصله پس از «انتخاب ویدیو» قرار گرفت.
+- فقط جای دکمه تغییر کرده است؛ ارتفاع و اندازهٔ دکمه‌ها و سایر عملکردها دست‌نخورده مانده‌اند.
+
+
+## 0.2.164
+- Moved the advanced-edit floating panel away from the right-side player area to the upper-left side, offset past the vertical tool rail, and narrowed it to reduce obstruction.
+- Halved the height of the three Rest buttons from 72dp to 36dp; their width remains 96dp.
+- No other button heights were changed.
+
+
+## Version 0.2.165
+- Added a `Split` button to the left vertical tool rail.
+- The Split panel accepts a requested number of output parts (2–100) and provides the `Original Utpot` action.
+- Each part is exported from the original input using FFmpeg stream copy (`-map 0 -c copy`), preserving input streams without re-encoding where the source/container permits it.
+- Split points are based on equal-duration time ranges. With stream-copy, actual boundaries can align to nearby keyframes and are not guaranteed to be frame-exact.
+- Existing button heights were not reduced.
+
+
+## Version 0.2.166
+- Extended the Split dialog to support either a requested number of equal parts or a time interval in seconds/minutes.
+- `Original Utpot` exports each interval as a separate file using FFmpeg stream-copy (`-map 0 -c copy`), preserving source streams where the container permits.
+- Interval mode accepts intervals that produce 2–1000 pieces; the final piece may be shorter than the requested interval.
+- Stream-copy cut points can shift to nearby keyframes and are not guaranteed to be frame-accurate. Android build/device testing has not been performed.
+
+
+## v0.2.167 — Original Utpot export hub
+- Added a dedicated `Original Utpot` button to the vertical tool rail.
+- Centralized available stream-copy-oriented actions: original-file splitting, track-timeline export when audio/subtitle clips exist, and external audio/subtitle muxing when selected.
+- Clearly notes that visual filters and some arbitrary cut operations may require re-encoding, and that preserving every stream depends on output-container compatibility.
+- Existing Split button and other button dimensions remain unchanged.
+
+
+## Version 0.2.168
+- Moved `Original Utpot` beside `خروجی تغییرات` in a shared horizontal row within the left vertical action rail.
+- Added long-press-and-drag reordering for action-rail items; drag is limited to the existing vertical rail and does not change button heights. The two output buttons move together as a row.
+- Other button dimensions and existing actions are preserved.
+- Package/XML checks only; Android build/device interaction testing has not been performed.
+
+
+## نسخه 0.2.169
+- در منوی Original Utpot دو گزینهٔ «انتخاب تکه‌های جدا» و «انتخاب تکه‌های چسبیده» اضافه شد.
+- تکه‌های جدا به فایل‌های مستقل و یک بازهٔ چسبیده به یک فایل صادر می‌شود؛ با درخواست کپی مستقیم همهٔ جریان‌های منبع (`-map 0 -c copy`).
+- ورودی زمان به ثانیه یا قالب دقیقه:ثانیه و ساعت:دقیقه:ثانیه پذیرفته می‌شود.

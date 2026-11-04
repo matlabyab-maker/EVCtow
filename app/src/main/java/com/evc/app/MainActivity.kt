@@ -182,7 +182,12 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         ensureSingleUndoRedoButtons()
+        enableActionRailDragReordering()
         findViewById<Button>(R.id.outputChangesButton).setOnClickListener { exportCombinedChanges() }
+        findViewById<Button>(R.id.splitOriginalButton).setOnClickListener { showOriginalSplitDialog() }
+        findViewById<Button>(R.id.selectSeparateRangesButton).setOnClickListener { showOriginalRangeSelectionDialog(separate = true) }
+        findViewById<Button>(R.id.selectContiguousRangeButton).setOnClickListener { showOriginalRangeSelectionDialog(separate = false) }
+        findViewById<Button>(R.id.originalOutputButton).setOnClickListener { showOriginalOutputMenu() }
         findViewById<Button>(R.id.globalDeleteButton).setOnClickListener { recordUndoState(); deleteSelectionOrShowOptions() }
         findViewById<Button>(R.id.undoButton).setOnClickListener { undoEditorStep() }
         findViewById<Button>(R.id.redoButton).setOnClickListener { redoEditorStep() }
@@ -472,6 +477,91 @@ class MainActivity : Activity() {
     }
 
     /** Accepts one shared video for editing or multiple shared videos for Merge. */
+    /** Long-press any tool (or either output button) and drag it to reorder items within the left rail. */
+    private fun enableActionRailDragReordering() {
+        val container = findViewById<LinearLayout>(R.id.standaloneActionsContainer)
+        val scroll = findViewById<ScrollView>(R.id.standaloneActionsScroll)
+        val handler = Handler(Looper.getMainLooper())
+        var pressedView: View? = null
+        var movingItem: View? = null
+        var dragging = false
+        var downRawY = 0f
+        val startDrag = Runnable {
+            val pressed = pressedView ?: return@Runnable
+            val item = (pressed.parent as? View)?.takeIf { it.parent === container } ?: pressed
+            if (item.parent === container) {
+                movingItem = item
+                dragging = true
+                item.alpha = 0.72f
+                scroll.requestDisallowInterceptTouchEvent(true)
+                Toast.makeText(this, "برای جابه‌جایی، انگشت را نگه دارید و به بالا یا پایین بکشید", Toast.LENGTH_SHORT).show()
+            }
+        }
+        fun moveItemTo(rawY: Float) {
+            val item = movingItem ?: return
+            val loc = IntArray(2)
+            container.getLocationOnScreen(loc)
+            val y = rawY - loc[1]
+            var targetIndex = container.childCount - 1
+            for (i in 0 until container.childCount) {
+                val child = container.getChildAt(i)
+                if (child === item) continue
+                if (y < child.top + child.height / 2f) { targetIndex = i; break }
+            }
+            val oldIndex = container.indexOfChild(item)
+            if (oldIndex >= 0 && targetIndex != oldIndex) {
+                container.removeView(item)
+                targetIndex = targetIndex.coerceIn(0, container.childCount)
+                container.addView(item, targetIndex)
+            }
+        }
+        fun attachDrag(view: View) {
+            view.setOnLongClickListener {
+                // Long-click feedback is provided by the touch listener; preserve ordinary clicks.
+                true
+            }
+            view.setOnTouchListener { v, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        pressedView = v
+                        downRawY = event.rawY
+                        dragging = false
+                        movingItem = null
+                        handler.removeCallbacks(startDrag)
+                        handler.postDelayed(startDrag, 500L)
+                        false
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (dragging) {
+                            moveItemTo(event.rawY)
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        handler.removeCallbacks(startDrag)
+                        val wasDragging = dragging
+                        movingItem?.alpha = 1f
+                        movingItem = null
+                        pressedView = null
+                        dragging = false
+                        scroll.requestDisallowInterceptTouchEvent(false)
+                        wasDragging
+                    }
+                    else -> dragging
+                }
+            }
+        }
+        for (i in 0 until container.childCount) {
+            val item = container.getChildAt(i)
+            attachDrag(item)
+            if (item is ViewGroup) {
+                for (j in 0 until item.childCount) attachDrag(item.getChildAt(j))
+            }
+        }
+    }
+
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -614,7 +704,7 @@ class MainActivity : Activity() {
                 minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
                 setPadding(6, 0, 6, 0)
                 setOnClickListener { bar.progress = initial; valueLabel.text = "$label: ${initial}%"; onValue(initial) }
-            }, LinearLayout.LayoutParams((96 * density).toInt(), (72 * density).toInt()))
+            }, LinearLayout.LayoutParams((96 * density).toInt(), (36 * density).toInt()))
             panel.addView(row)
         }
         var brightness = 100; var contrast = 100; var gamma = 100
@@ -638,7 +728,7 @@ class MainActivity : Activity() {
             isFillViewport = true
             addView(panel)
         }
-        val popup = PopupWindow(scroll, (minOf(340, (resources.displayMetrics.widthPixels / density * 0.82f).toInt()) * density).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT, false).apply {
+        val popup = PopupWindow(scroll, (minOf(280, (resources.displayMetrics.widthPixels / density * 0.68f).toInt()) * density).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT, false).apply {
             isTouchable = true
             isFocusable = false
             isOutsideTouchable = false
@@ -651,7 +741,7 @@ class MainActivity : Activity() {
         }
         closeButton.setOnClickListener { popup.dismiss() }
         val root = findViewById<View>(R.id.mainRootLayout)
-        popup.showAtLocation(root, Gravity.TOP or Gravity.END, (8 * density).toInt(), (72 * density).toInt())
+        popup.showAtLocation(root, Gravity.TOP or Gravity.START, (84 * density).toInt(), (72 * density).toInt())
     }
 
     private fun chooseVideosToAppend() {
@@ -2954,6 +3044,320 @@ class MainActivity : Activity() {
                     statusText.text = "ذخیرهٔ خروجی ناموفق بود: ${e.message ?: "خطا"}"
                     Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
                 }
+            }
+        }
+    }
+
+    /** Central entry point for exports that should avoid video re-encoding where possible. */
+    private fun showOriginalOutputMenu() {
+        if (selectedUri == null) {
+            Toast.makeText(this, "ابتدا ویدیوی ورودی را انتخاب کنید", Toast.LENGTH_LONG).show()
+            return
+        }
+        val choices = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+        choices += "انتخاب تکه‌های جدا (خروجی هر تکه جداگانه)"
+        actions += { showOriginalRangeSelectionDialog(separate = true) }
+        choices += "انتخاب تکه‌های چسبیده (یک بازهٔ پیوسته)"
+        actions += { showOriginalRangeSelectionDialog(separate = false) }
+        choices += "تقسیم فایل اصلی (Split؛ بدون رمزگذاری مجدد)"
+        actions += { showOriginalSplitDialog() }
+        if (trackClips.any { it.kind == TrackClipKind.AUDIO || it.kind == TrackClipKind.SUBTITLE }) {
+            choices += "خروجی نوار ترک‌ها؛ حفظ کدک ویدیوی اصلی در صورت سازگاری"
+            actions += { exportTrackTimeline() }
+        }
+        if (externalAudioUri != null || externalSubtitleUri != null) {
+            choices += "افزودن ترک صوتی/زیرنویس به فایل اصلی بدون رمزگذاری مجدد ویدیو"
+            actions += { exportWithExternalTracks() }
+        }
+        choices += "راهنمای خروجی اصلی"
+        actions += {
+            AlertDialog.Builder(this)
+                .setTitle("Original Utpot • خروجی بدون تغییر کدک")
+                .setMessage("این بخش خروجی‌هایی را متمرکز می‌کند که ویدیوی اصلی را با Stream Copy حفظ می‌کنند. خروجی‌های دارای برش زمانی دلخواه، فیلتر تصویری، رنگ، متن یا ترکیب تصویر ممکن است به رمزگذاری مجدد نیاز داشته باشند. حفظ ترک‌های خاص به قالب خروجی و سازگاری کدک آن‌ها بستگی دارد.")
+                .setPositiveButton("باشه", null)
+                .show()
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Original Utpot • خروجی‌های بدون تغییر کدک")
+            .setItems(choices.toTypedArray()) { _, which -> actions[which].invoke() }
+            .setNegativeButton("لغو", null)
+            .show()
+    }
+
+    /** Offers stream-copy selection for disjoint ranges or one contiguous range. */
+    private fun showOriginalRangeSelectionDialog(separate: Boolean) {
+        if (selectedUri == null || videoDurationMs <= 0L) {
+            Toast.makeText(this, "ابتدا ویدیوی ورودی را انتخاب کنید", Toast.LENGTH_LONG).show()
+            return
+        }
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 12, 24, 8)
+        }
+        panel.addView(TextView(this).apply {
+            text = if (separate)
+                "بازه‌ها را با ویرگول جدا کنید؛ هر بازه به فایل جداگانه تبدیل می‌شود. قالب: شروع-پایان، با ثانیه یا زمان دقیقه:ثانیه. مثال: 0-10,20-35"
+            else
+                "زمان شروع و پایان را وارد کنید؛ یک تکهٔ پیوسته ساخته می‌شود. می‌توانید ثانیه یا دقیقه:ثانیه وارد کنید."
+            textSize = 14f
+        })
+        val rangesInput = EditText(this).apply {
+            hint = if (separate) "مثلاً 0-10,20-35,01:10-01:30" else "مثلاً 00:20-01:30"
+            setSingleLine(false)
+            minLines = if (separate) 2 else 1
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            setText(if (separate) "0-10,20-35" else "0-30")
+        }
+        panel.addView(rangesInput, LinearLayout.LayoutParams(-1, if (separate) 88 else 56))
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(if (separate) "انتخاب تکه‌های جدا" else "انتخاب تکه‌های چسبیده")
+            .setView(panel)
+            .setNegativeButton("لغو", null)
+            .setPositiveButton("Original Utpot", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val raw = rangesInput.text.toString().trim()
+                val parsed: List<Pair<Long, Long>> = try {
+                    if (separate) {
+                        raw.split(",", "،", ";", "؛").map { token ->
+                            val pair = token.trim().split("-")
+                            require(pair.size == 2) { "هر تکه باید به‌شکل شروع-پایان باشد" }
+                            val start = parseTimeInput(pair[0].trim()) ?: throw IllegalArgumentException("زمان شروع نامعتبر است")
+                            val end = parseTimeInput(pair[1].trim()) ?: throw IllegalArgumentException("زمان پایان نامعتبر است")
+                            require(start < end && end <= videoDurationMs) { "بازه باید داخل مدت ویدیو باشد و پایان از شروع بیشتر باشد" }
+                            start to end
+                        }
+                    } else {
+                        val pair = raw.split("-")
+                        require(pair.size == 2) { "زمان را به‌شکل شروع-پایان وارد کنید" }
+                        val start = parseTimeInput(pair[0].trim()) ?: throw IllegalArgumentException("زمان شروع نامعتبر است")
+                        val end = parseTimeInput(pair[1].trim()) ?: throw IllegalArgumentException("زمان پایان نامعتبر است")
+                        require(start < end && end <= videoDurationMs) { "بازه باید داخل مدت ویدیو باشد و پایان از شروع بیشتر باشد" }
+                        listOf(start to end)
+                    }
+                } catch (e: Exception) {
+                    rangesInput.error = e.message ?: "بازهٔ زمانی نامعتبر است"
+                    return@setOnClickListener
+                }
+                if (parsed.isEmpty() || parsed.size > 100) {
+                    rangesInput.error = "تعداد بازه‌ها باید بین 1 تا 100 باشد"
+                    return@setOnClickListener
+                }
+                dialog.dismiss()
+                exportOriginalSelectedRanges(parsed, separate)
+            }
+        }
+        dialog.show()
+    }
+
+    /** Exports chosen ranges with -map 0 and -c copy to preserve compatible source streams. */
+    private fun exportOriginalSelectedRanges(ranges: List<Pair<Long, Long>>, separate: Boolean) {
+        val sourceUri = selectedUri ?: return
+        val button = findViewById<Button>(R.id.originalOutputButton)
+        button.isEnabled = false
+        statusText.text = "در حال ساخت ${ranges.size} خروجی با کپی مستقیم جریان‌ها…"
+        worker.execute {
+            var inputFile: File? = null
+            var saved = 0
+            val errors = mutableListOf<String>()
+            try {
+                inputFile = copyUriToCache(sourceUri, "evc_original_ranges")
+                val sourceName = displayNameForUri(sourceUri)
+                val sourceExt = sourceName.substringAfterLast('.', "mp4").lowercase(java.util.Locale.ROOT)
+                    .filter { it.isLetterOrDigit() }.take(8).ifBlank { "mp4" }
+                ranges.forEachIndexed { index, range ->
+                    var temp: File? = null
+                    var outUri: Uri? = null
+                    try {
+                        val startMs = range.first
+                        val endMs = range.second
+                        temp = File(cacheDir, "evc_original_range_${index + 1}_${System.currentTimeMillis()}.$sourceExt")
+                        val args = listOf(
+                            "-y", "-ss", String.format(java.util.Locale.US, "%.3f", startMs / 1000.0),
+                            "-i", inputFile.absolutePath,
+                            "-t", String.format(java.util.Locale.US, "%.3f", (endMs - startMs) / 1000.0),
+                            "-map", "0", "-c", "copy", "-avoid_negative_ts", "make_zero", temp.absolutePath
+                        )
+                        val session = FFmpegKit.executeWithArguments(args.toTypedArray())
+                        if (!ReturnCode.isSuccess(session.returnCode) || !temp.exists() || temp.length() == 0L) {
+                            throw IllegalStateException(session.failStackTrace ?: session.allLogsAsString.takeLast(500).ifBlank { "برش این بازه ناموفق بود" })
+                        }
+                        val label = if (separate) "EVC_original_piece" else "EVC_original_contiguous"
+                        val values = ContentValues().apply {
+                            put(MediaStore.Video.Media.DISPLAY_NAME, "${label}_${(index + 1).toString().padStart(3, '0')}_${System.currentTimeMillis()}.$sourceExt")
+                            put(MediaStore.Video.Media.MIME_TYPE, "video/*")
+                            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                                put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EVC")
+                                put(MediaStore.Video.Media.IS_PENDING, 1)
+                            }
+                        }
+                        outUri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                            ?: throw IllegalStateException("ساخت فایل خروجی ناموفق بود")
+                        contentResolver.openOutputStream(outUri)?.use { output -> temp.inputStream().use { it.copyTo(output) } }
+                            ?: throw IllegalStateException("نوشتن فایل خروجی ناموفق بود")
+                        if (android.os.Build.VERSION.SDK_INT >= 29) {
+                            contentResolver.update(outUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+                        }
+                        saved++
+                    } catch (e: Exception) {
+                        outUri?.let { try { contentResolver.delete(it, null, null) } catch (_: Exception) { } }
+                        errors += "تکهٔ ${index + 1}: ${e.message ?: e.javaClass.simpleName}"
+                    } finally { temp?.delete() }
+                }
+            } catch (e: Exception) {
+                errors += e.message ?: e.javaClass.simpleName
+            } finally { inputFile?.delete() }
+            mainHandler.post {
+                button.isEnabled = true
+                statusText.text = if (errors.isEmpty()) "$saved فایل در Movies/EVC ذخیره شد؛ کپی مستقیم جریان‌ها انجام شد. برش دقیق ممکن است به فریم کلیدی نزدیک شود." else "$saved فایل ذخیره شد؛ ${errors.size} خطا: ${errors.first()}"
+                Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun showOriginalSplitDialog() {
+        if (selectedUri == null || videoDurationMs <= 0L) {
+            Toast.makeText(this, "ابتدا ویدیوی ورودی را انتخاب کنید", Toast.LENGTH_LONG).show()
+            return
+        }
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 12, 24, 8)
+        }
+        panel.addView(TextView(this).apply {
+            text = "تقسیم بر اساس تعداد تکه‌ها یا فاصلهٔ زمانی را انتخاب کنید. ترک‌های فایل با کپی مستقیم و بدون رمزگذاری مجدد نگه داشته می‌شوند."
+            textSize = 14f
+        })
+        val modeGroup = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        val countMode = RadioButton(this).apply { id = View.generateViewId(); text = "تعداد تکه‌های مساوی"; isChecked = true }
+        val intervalMode = RadioButton(this).apply { id = View.generateViewId(); text = "تقسیم بر اساس فاصلهٔ زمانی" }
+        modeGroup.addView(countMode)
+        modeGroup.addView(intervalMode)
+        panel.addView(modeGroup)
+        val valueInput = EditText(this).apply {
+            hint = "تعداد تکه‌ها (مثلاً 4)"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setText("2")
+            selectAll()
+        }
+        panel.addView(valueInput, LinearLayout.LayoutParams(-1, 52))
+        val unitGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL; visibility = View.GONE }
+        val secondsUnit = RadioButton(this).apply { id = View.generateViewId(); text = "ثانیه"; isChecked = true }
+        val minutesUnit = RadioButton(this).apply { id = View.generateViewId(); text = "دقیقه" }
+        unitGroup.addView(secondsUnit)
+        unitGroup.addView(minutesUnit)
+        panel.addView(unitGroup)
+        modeGroup.setOnCheckedChangeListener { _, checkedId ->
+            val byInterval = checkedId == intervalMode.id
+            unitGroup.visibility = if (byInterval) View.VISIBLE else View.GONE
+            valueInput.hint = if (byInterval) "فاصلهٔ زمانی (مثلاً 30)" else "تعداد تکه‌ها (مثلاً 4)"
+            valueInput.setText(if (byInterval) "30" else "2")
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Split • تقسیم فایل اصلی")
+            .setView(panel)
+            .setNegativeButton("لغو", null)
+            .setPositiveButton("Original Utpot", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val value = valueInput.text.toString().toIntOrNull()
+                if (value == null || value <= 0) {
+                    valueInput.error = "عدد مثبت وارد کنید"
+                    return@setOnClickListener
+                }
+                if (countMode.isChecked) {
+                    if (value !in 2..100) {
+                        valueInput.error = "تعداد باید بین 2 تا 100 باشد"
+                        return@setOnClickListener
+                    }
+                    dialog.dismiss()
+                    exportOriginalVideoSplits(value)
+                } else {
+                    val intervalMs = value.toLong() * if (minutesUnit.isChecked) 60_000L else 1_000L
+                    if (intervalMs > videoDurationMs) {
+                        valueInput.error = "فاصلهٔ زمانی نباید از مدت ویدیو بیشتر باشد"
+                        return@setOnClickListener
+                    }
+                    val parts = ((videoDurationMs + intervalMs - 1) / intervalMs).toInt()
+                    if (parts !in 2..1000) {
+                        valueInput.error = "این فاصله به $parts تکه می‌رسد؛ فاصله‌ای انتخاب کنید که حداکثر 1000 تکه بسازد"
+                        return@setOnClickListener
+                    }
+                    dialog.dismiss()
+                    exportOriginalVideoSplits(parts, intervalMs)
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    /** Splits the input into equal-duration files while stream-copying every input stream. */
+    private fun exportOriginalVideoSplits(partCount: Int, intervalMs: Long? = null) {
+        val sourceUri = selectedUri ?: return
+        val duration = videoDurationMs
+        if (duration <= 0L || partCount < 2 || partCount > 1000 || (intervalMs == null && partCount > 100)) return
+        val button = findViewById<Button>(R.id.splitOriginalButton)
+        button.isEnabled = false
+        statusText.text = "در حال تقسیم ویدیو به $partCount تکه با کپی مستقیم کدک و همهٔ ترک‌ها…"
+        worker.execute {
+            var inputFile: File? = null
+            var saved = 0
+            val errors = mutableListOf<String>()
+            try {
+                inputFile = copyUriToCache(sourceUri, "evc_original_split")
+                val sourceName = displayNameForUri(sourceUri)
+                val sourceExt = sourceName.substringAfterLast('.', "mp4").lowercase(java.util.Locale.ROOT)
+                    .filter { it.isLetterOrDigit() }.take(8).ifBlank { "mp4" }
+                for (index in 0 until partCount) {
+                    var temp: File? = null
+                    var outUri: Uri? = null
+                    try {
+                        val startMs = if (intervalMs == null) duration * index / partCount else intervalMs * index
+                        val endMs = if (intervalMs == null) duration * (index + 1) / partCount else minOf(duration, intervalMs * (index + 1))
+                        if (endMs <= startMs) throw IllegalStateException("مدت فایل برای این تعداد تکه کافی نیست")
+                        temp = File(cacheDir, "evc_original_part_${index + 1}_${System.currentTimeMillis()}.$sourceExt")
+                        val args = listOf(
+                            "-y", "-ss", String.format(java.util.Locale.US, "%.3f", startMs / 1000.0),
+                            "-i", inputFile.absolutePath,
+                            "-t", String.format(java.util.Locale.US, "%.3f", (endMs - startMs) / 1000.0),
+                            "-map", "0", "-c", "copy", "-avoid_negative_ts", "make_zero",
+                            temp.absolutePath
+                        )
+                        val session = FFmpegKit.executeWithArguments(args.toTypedArray())
+                        if (!ReturnCode.isSuccess(session.returnCode) || !temp.exists() || temp.length() == 0L) {
+                            throw IllegalStateException(session.failStackTrace ?: session.allLogsAsString.takeLast(500).ifBlank { "FFmpeg نتوانست این تکه را ذخیره کند" })
+                        }
+                        val values = ContentValues().apply {
+                            put(MediaStore.Video.Media.DISPLAY_NAME, "EVC_original_part_${(index + 1).toString().padStart(3, '0')}_${System.currentTimeMillis()}.$sourceExt")
+                            put(MediaStore.Video.Media.MIME_TYPE, "video/*")
+                            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                                put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EVC")
+                                put(MediaStore.Video.Media.IS_PENDING, 1)
+                            }
+                        }
+                        outUri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                            ?: throw IllegalStateException("ساخت فایل خروجی ناموفق بود")
+                        contentResolver.openOutputStream(outUri)?.use { output -> temp.inputStream().use { it.copyTo(output) } }
+                            ?: throw IllegalStateException("نوشتن فایل خروجی ناموفق بود")
+                        if (android.os.Build.VERSION.SDK_INT >= 29) {
+                            contentResolver.update(outUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+                        }
+                        saved++
+                    } catch (e: Exception) {
+                        outUri?.let { try { contentResolver.delete(it, null, null) } catch (_: Exception) { } }
+                        errors.add("تکهٔ ${index + 1}: ${e.message ?: e.javaClass.simpleName}")
+                    } finally { temp?.delete() }
+                }
+            } catch (e: Exception) {
+                errors.add(e.message ?: e.javaClass.simpleName)
+            } finally { inputFile?.delete() }
+            mainHandler.post {
+                button.isEnabled = true
+                statusText.text = if (errors.isEmpty()) "$saved تکه در Movies/EVC ذخیره شد؛ همهٔ ترک‌ها با کپی مستقیم و بدون رمزگذاری مجدد نگه داشته شدند. توجه: برش stream-copy ممکن است به مرز کلیدفریم نزدیک شود." else "$saved تکه ذخیره شد؛ ${errors.size} مورد ناموفق بود: ${errors.first()}"
+                Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
             }
         }
     }
